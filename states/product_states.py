@@ -18,3 +18,12 @@ class ProductWizard(StatesGroup):
     waiting_for_seo_slug = State()
     waiting_for_seo_title = State()
     waiting_for_seo_desc = State()
+# وضعیت‌های جدید برای گالری تصاویر
+    waiting_for_gallery_image = State()
+    waiting_for_gallery_alt = State()
+    waiting_for_gallery_title = State()
+    
+    waiting_for_seo_keyword = State()
+    waiting_for_seo_slug = State()
+    waiting_for_seo_title = State()
+    waiting_for_seo_desc = State()
