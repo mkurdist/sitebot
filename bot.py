@@ -9,6 +9,7 @@ from config import BOT_TOKEN, ADMIN_ID
 from utils.security import AdminOnlyMiddleware
 from handlers.common import router as common_router
 from handlers.products import router as products_router
+from handlers.orders import router as orders_router  # <--- این خط اضافه شد
 
 # یک صفحه ساده برای اینکه رندر متوجه شود سرور وب ما روشن است
 async def health_check(request):
@@ -162,6 +163,7 @@ async def main():
     # اضافه کردن روترها
     dp.include_router(common_router)
     dp.include_router(products_router)
+    dp.include_router(orders_router)  # <--- این خط اضافه شد
 
     # راه‌اندازی سرور وب
     app = web.Application()
