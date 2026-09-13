@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from states.product_states import ProductWizard
 from services.woocommerce import WooCommerceService
@@ -7,93 +7,87 @@ from services.woocommerce import WooCommerceService
 router = Router()
 wc_service = WooCommerceService()
 
-# شروع فرآیند
+# --- تابع کمکی برای ساخت دکمه‌های داشبورد ---
+def get_dashboard_keyboard(product_id: int, product_name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📝 توضیحات", callback_data=f"edit_desc_{product_id}"),
+            InlineKeyboardButton(text="🖼 تصویر اصلی", callback_data=f"edit_img_{product_id}")
+        ],
+        [
+            InlineKeyboardButton(text="💰 قیمت و موجودی", callback_data=f"edit_price_{product_id}"),
+            InlineKeyboardButton(text="📂 دسته‌بندی", callback_data=f"edit_cat_{product_id}")
+        ],
+        [
+            InlineKeyboardButton(text="🔍 تنظیمات سئو (Rank Math)", callback_data=f"edit_seo_{product_id}")
+        ],
+        [
+            InlineKeyboardButton(text="✅ انتشار نهایی", callback_data=f"publish_{product_id}"),
+            InlineKeyboardButton(text="❌ حذف", callback_data=f"delete_{product_id}")
+        ]
+    ])
+
+# --- شروع ساخت محصول ---
 @router.message(F.text == "➕ محصول جدید")
 async def start_product_wizard(message: Message, state: FSMContext):
-    await state.clear() # پاک کردن وضعیت‌های قبلی
-    await state.set_state(ProductWizard.name)
-    await message.answer("🛒 عالی! بیایید یک محصول جدید اضافه کنیم.\n\nابتدا **نام محصول** را وارد کنید (مثلاً: پیاله سفالی طرح گل):")
+    await state.clear()
+    await state.set_state(ProductWizard.waiting_for_name)
+    await message.answer("🛒 **ساخت محصول جدید**\n\nلطفاً فقط **نام محصول** را وارد کنید:")
 
-# لغو فرآیند در هر مرحله
 @router.message(F.text == "/cancel")
 async def cancel_wizard(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ فرآیند ثبت محصول لغو شد.")
+    await message.answer("❌ عملیات لغو شد.")
 
-# مرحله ۱: دریافت نام و درخواست توضیحات کوتاه
-@router.message(ProductWizard.name)
-async def process_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    await state.set_state(ProductWizard.short_description)
-    await message.answer("📝 حالا **توضیحات کوتاه** محصول را بفرستید:")
-
-# مرحله ۲: دریافت توضیحات کوتاه و درخواست توضیحات کامل
-@router.message(ProductWizard.short_description)
-async def process_short_desc(message: Message, state: FSMContext):
-    # تبدیل خطوط جدید به تگ <br> برای وردپرس
-    html_text = message.html_text.replace("\n", "<br>")
-    await state.update_data(short_description=html_text)
-    await state.set_state(ProductWizard.long_description)
-    await message.answer("📄 بسیار عالی. حالا **توضیحات کامل** محصول را بفرستید:")
-
-# مرحله ۳: دریافت توضیحات کامل و درخواست قیمت
-@router.message(ProductWizard.long_description)
-async def process_long_desc(message: Message, state: FSMContext):
-    html_text = message.html_text.replace("\n", "<br>")
-    await state.update_data(long_description=html_text)
-    await state.set_state(ProductWizard.price)
-    await message.answer("💰 **قیمت محصول** را به تومان وارد کنید (فقط عدد انگلیسی، مثلاً 850000):")
-
-# مرحله ۴: دریافت قیمت و درخواست موجودی انبار
-@router.message(ProductWizard.price)
-async def process_price(message: Message, state: FSMContext):
-    try:
-        # بررسی اینکه کاربر حتماً عدد فرستاده باشد
-        price = int(message.text.replace(",", "")) 
-        await state.update_data(price=str(price))
-        await state.set_state(ProductWizard.stock)
-        await message.answer("📦 **موجودی انبار** را وارد کنید (فقط عدد، مثلاً 10):")
-    except ValueError:
-        await message.answer("❌ لطفاً قیمت را فقط به صورت عدد وارد کنید!")
-
-# مرحله ۵: دریافت موجودی و ثبت نهایی در سایت
-@router.message(ProductWizard.stock)
-async def process_stock(message: Message, state: FSMContext):
-    try:
-        stock = int(message.text)
-    except ValueError:
-        await message.answer("❌ لطفاً موجودی را فقط به صورت عدد وارد کنید!")
-        return
-
-    await state.update_data(stock=stock)
-    data = await state.get_data()
-    
-    wait_msg = await message.answer("⏳ در حال ثبت محصول با جزئیات کامل در سایت...")
+# --- دریافت نام و ساخت پیش‌نویس موقت ---
+@router.message(ProductWizard.waiting_for_name)
+async def process_initial_name(message: Message, state: FSMContext):
+    product_name = message.text
+    wait_msg = await message.answer("⏳ در حال ایجاد فضای پیش‌نویس در سایت...")
     
     try:
+        # ساخت محصول اولیه فقط با یک نام
         product_data = {
-            "name": data['name'],
+            "name": product_name,
             "type": "simple",
-            "short_description": data['short_description'],
-            "description": data['long_description'],
-            "regular_price": data['price'],
-            "manage_stock": True,
-            "stock_quantity": data['stock'],
-            "status": "draft" # فعلاً همچنان پیش‌نویس ثبت می‌کنیم
+            "status": "draft"
         }
         
         result = await wc_service.create_simple_product(product_data)
+        product_id = result['id']
         
+        # نمایش داشبورد شیشه‌ای
         text = (
-            "✅ **محصول با موفقیت در سایت ثبت شد!**\n\n"
-            f"🏷 **نام:** {result['name']}\n"
-            f"💰 **قیمت:** {result.get('price', '0')} تومان\n"
-            f"📦 **موجودی:** {data['stock']} عدد\n"
-            f"🔗 **آیدی در سایت:** {result['id']}"
+            f"📦 **محصول ایجاد شد (پیش‌نویس)**\n\n"
+            f"🏷 **نام:** {product_name}\n"
+            f"🆔 **آیدی:** {product_id}\n\n"
+            f"👇 حالا از پنل زیر، هر بخشی را که می‌خواهید تکمیل کنید:"
         )
-        await wait_msg.edit_text(text)
-        await state.clear()
+        
+        await wait_msg.edit_text(
+            text, 
+            reply_markup=get_dashboard_keyboard(product_id, product_name)
+        )
+        await state.clear() # وضعیت را پاک می‌کنیم تا منتظر کلیک روی دکمه‌ها بماند
         
     except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در ثبت محصول:\n{str(e)[:500]}")
+        await wait_msg.edit_text(f"❌ خطا در ساخت پیش‌نویس:\n{str(e)[:500]}")
         await state.clear()
+
+# --- هندل کردن کلیک روی دکمه‌های داشبورد (تست اولیه) ---
+@router.callback_query(F.data.startswith("edit_"))
+async def handle_dashboard_clicks(callback: CallbackQuery):
+    action = callback.data.split("_")[1]
+    product_id = callback.data.split("_")[2]
+    
+    # فعلاً فقط یک پیام تستی می‌دهیم تا مطمئن شویم دکمه‌ها کار می‌کنند
+    actions_map = {
+        "desc": "بخش توضیحات",
+        "img": "بخش آپلود تصویر",
+        "price": "بخش قیمت و موجودی",
+        "cat": "بخش دسته‌بندی",
+        "seo": "بخش سئو"
+    }
+    
+    part_name = actions_map.get(action, "نامشخص")
+    await callback.answer(f"شما روی {part_name} برای محصول {product_id} کلیک کردید!", show_alert=True)
