@@ -92,7 +92,71 @@ async def process_delete(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
 
 # ==========================================
-# سیستم پیشرفته تصویر اصلی 🖼 (پشتیبانی از WebP / فایل و عکس + Alt و Title)
+# دکمه: تنظیمات سئو 🔍 (Rank Math پیشرفته + Slug)
+# ==========================================
+@router.callback_query(F.data.startswith("edit_seo_"))
+async def start_edit_seo(callback: CallbackQuery, state: FSMContext):
+    product_id = int(callback.data.split("_")[2])
+    await state.update_data(product_id=product_id)
+    await state.set_state(ProductWizard.waiting_for_seo_keyword)
+    await callback.message.answer("🔍 **تنظیمات سئو (Rank Math)**\n\nابتدا **کلمه کلیدی اصلی** (Focus Keyword) را وارد کنید:")
+    await callback.answer()
+
+@router.message(ProductWizard.waiting_for_seo_keyword)
+async def process_seo_keyword(message: Message, state: FSMContext):
+    await state.update_data(seo_keyword=message.text)
+    await state.set_state(ProductWizard.waiting_for_seo_slug)
+    await message.answer("🔗 حالا **پیوند دایمی (Slug / نامک)** را وارد کنید (مثلاً `blue-ceramic-bowl` یا متن دلخواه انگلیسی/فارسی):")
+
+@router.message(ProductWizard.waiting_for_seo_slug)
+async def process_seo_slug(message: Message, state: FSMContext):
+    await state.update_data(seo_slug=message.text)
+    await state.set_state(ProductWizard.waiting_for_seo_title)
+    await message.answer("📝 بسیار عالی. حالا **عنوان سئو (SEO Title)** را بفرستید:")
+
+@router.message(ProductWizard.waiting_for_seo_title)
+async def process_seo_title(message: Message, state: FSMContext):
+    await state.update_data(seo_title=message.text)
+    await state.set_state(ProductWizard.waiting_for_seo_desc)
+    await message.answer("📄 در نهایت، **توضیحات متا (Meta Description)** را بفرستید:")
+
+@router.message(ProductWizard.waiting_for_seo_desc)
+async def process_seo_desc(message: Message, state: FSMContext):
+    data = await state.get_data()
+    product_id = data['product_id']
+    keyword = data['seo_keyword']
+    slug = data['seo_slug']
+    title = data['seo_title']
+    desc = message.text
+    
+    wait_msg = await message.answer("⏳ در حال ثبت اطلاعات سئو و پیوند دایمی در سایت...")
+    try:
+        meta_data = [
+            {"key": "rank_math_focus_keyword", "value": keyword},
+            {"key": "rank_math_title", "value": title},
+            {"key": "rank_math_description", "value": desc}
+        ]
+        
+        # ارسال هم Slug و هم فیلدهای Rank Math
+        update_payload = {
+            "slug": slug,
+            "meta_data": meta_data
+        }
+        
+        await wc_service.update_product(product_id, update_payload)
+        product = await wc_service.get_product(product_id)
+        
+        await wait_msg.edit_text(
+            f"✅ **اطلاعات سئو و پیوند دایمی با موفقیت ثبت شد!**\n\n👇 داشبورد محصول:",
+            reply_markup=get_dashboard_keyboard(product_id, product['name'])
+        )
+        await state.clear()
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
+        await state.clear()
+
+# ==========================================
+# دکمه: تصویر اصلی 🖼 (با پشتیبانی WebP و Alt/Title)
 # ==========================================
 @router.callback_query(F.data.startswith("edit_img_"))
 async def start_edit_img(callback: CallbackQuery, state: FSMContext):
@@ -101,31 +165,27 @@ async def start_edit_img(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ProductWizard.waiting_for_image)
     await callback.message.answer(
         "🖼 **آپلود تصویر اصلی**\n\n"
-        "لطفاً تصویر خود را بفرستید.\n"
-        "*(نکته: هم می‌توانید به صورت عکس معمولی بفرستید و هم به صورت فایل/Document با فرمت webp)*"
+        "لطفاً تصویر خود را بفرستید (عکس معمولی یا فایل WebP):"
     )
     await callback.answer()
 
-# دریافت عکس به صورت فتو یا فایل (WebP و...)
 @router.message(ProductWizard.waiting_for_image, F.photo | F.document)
 async def process_image_file(message: Message, state: FSMContext, bot: Bot):
     file_id = None
     if message.photo:
         file_id = message.photo[-1].file_id
     elif message.document:
-        # بررسی فرمت‌های تصویری رایج از جمله webp
         doc = message.document
         if doc.mime_type and "image" in doc.mime_type or doc.file_name.lower().endswith(('.webp', '.png', '.jpg', '.jpeg')):
             file_id = doc.file_id
             
     if not file_id:
-        await message.answer("❌ فرمت فایل ارسالی معتبر نیست. لطفاً یک تصویر (عکس یا فایل تصویری webp/png/jpg) بفرستید.")
+        await message.answer("❌ فرمت فایل ارسالی معتبر نیست. لطفاً یک تصویر ارسال کنید.")
         return
 
-    # ذخیره آیدی فایل در حافظه
     await state.update_data(file_id=file_id)
     await state.set_state(ProductWizard.waiting_for_image_alt)
-    await message.answer("📝 لطفاً **متن جایگزین (Alt Text)** تصویر را وارد کنید (برای سئو):")
+    await message.answer("📝 لطفاً **متن جایگزین (Alt Text)** تصویر را وارد کنید:")
 
 @router.message(ProductWizard.waiting_for_image)
 async def process_image_invalid(message: Message):
@@ -145,12 +205,11 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
     file_id = data['file_id']
     alt_text = data['alt_text']
     
-    wait_msg = await message.answer("⏳ در حال پردازش و آپلود تصویر در سایت...")
+    wait_msg = await message.answer("⏳ در حال آپلود تصویر در سایت...")
     try:
         file_info = await bot.get_file(file_id)
         file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
         
-        # تنظیم تصویر همراه با Alt و Title اختصاصی شما
         update_data = {
             "images": [
                 {
@@ -165,10 +224,7 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
         product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
-            f"✅ **تصویر با مشخصات کامل در سایت ثبت شد!**\n\n"
-            f"📌 **عنوان:** {title_text}\n"
-            f"🔍 **متن جایگزین:** {alt_text}\n\n"
-            f"👇 داشبورد محصول:",
+            f"✅ **تصویر با مشخصات کامل ثبت شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
         await state.clear()
@@ -299,52 +355,6 @@ async def process_backdash(callback: CallbackQuery, state: FSMContext):
         pass
 
 # ==========================================
-# دکمه: تنظیمات سئو 🔍 (Rank Math)
-# ==========================================
-@router.callback_query(F.data.startswith("edit_seo_"))
-async def start_edit_seo(callback: CallbackQuery, state: FSMContext):
-    product_id = int(callback.data.split("_")[2])
-    await state.update_data(product_id=product_id)
-    await state.set_state(ProductWizard.waiting_for_seo_keyword)
-    await callback.message.answer("🔍 **تنظیمات سئو (Rank Math)**\n\nابتدا **کلمه کلیدی اصلی** (Focus Keyword) را وارد کنید:")
-    await callback.answer()
-
-@router.message(ProductWizard.waiting_for_seo_keyword)
-async def process_seo_keyword(message: Message, state: FSMContext):
-    await state.update_data(seo_keyword=message.text)
-    await state.set_state(ProductWizard.waiting_for_seo_title)
-    await message.answer("📝 بسیار عالی. حالا **عنوان سئو (SEO Title)** را بفرستید:")
-
-@router.message(ProductWizard.waiting_for_seo_title)
-async def process_seo_title(message: Message, state: FSMContext):
-    await state.update_data(seo_title=message.text)
-    await state.set_state(ProductWizard.waiting_for_seo_desc)
-    await message.answer("📄 در نهایت، **توضیحات متا (Meta Description)** را بفرستید:")
-
-@router.message(ProductWizard.waiting_for_seo_desc)
-async def process_seo_desc(message: Message, state: FSMContext):
-    data = await state.get_data()
-    product_id, keyword, title, desc = data['product_id'], data['seo_keyword'], data['seo_title'], message.text
-    wait_msg = await message.answer("⏳ در حال ثبت اطلاعات سئو در سایت...")
-    try:
-        meta_data = [
-            {"key": "rank_math_focus_keyword", "value": keyword},
-            {"key": "rank_math_title", "value": title},
-            {"key": "rank_math_description", "value": desc}
-        ]
-        await wc_service.update_product(product_id, {"meta_data": meta_data})
-        product = await wc_service.get_product(product_id)
-        
-        await wait_msg.edit_text(
-            f"✅ **اطلاعات سئو با موفقیت در Rank Math ذخیره شد!**\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name'])
-        )
-        await state.clear()
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
-        await state.clear()
-
-# ==========================================
 # دکمه: توضیحات 📝
 # ==========================================
 @router.callback_query(F.data.startswith("edit_desc_"))
@@ -352,7 +362,7 @@ async def start_edit_desc(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[2])
     await state.update_data(product_id=product_id)
     await state.set_state(ProductWizard.waiting_for_short_desc)
-    await callback.message.answer("📝 لطفاً **توضیحات کوتاه** محصول را بفرستید:\n(این متن معمولاً کنار عکس قرار می‌گیرد)")
+    await callback.message.answer("📝 لطفاً **توضیحات کوتاه** محصول را بفرستید:")
     await callback.answer()
 
 @router.message(ProductWizard.waiting_for_short_desc)
@@ -390,7 +400,7 @@ async def start_edit_price(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[2])
     await state.update_data(product_id=product_id)
     await state.set_state(ProductWizard.waiting_for_price)
-    await callback.message.answer("💰 لطفاً **قیمت اصلی محصول** را به تومان وارد کنید (فقط عدد انگلیسی، مثلاً 850000):")
+    await callback.message.answer("💰 لطفاً **قیمت اصلی محصول** را به تومان وارد کنید (فقط عدد):")
     await callback.answer()
 
 @router.message(ProductWizard.waiting_for_price)
@@ -400,7 +410,7 @@ async def process_price(message: Message, state: FSMContext):
         return
     await state.update_data(price=message.text)
     await state.set_state(ProductWizard.waiting_for_stock)
-    await message.answer("📦 حالا **موجودی انبار** را وارد کنید (فقط عدد، مثلاً 10):")
+    await message.answer("📦 حالا **موجودی انبار** را وارد کنید (فقط عدد):")
 
 @router.message(ProductWizard.waiting_for_stock)
 async def process_stock(message: Message, state: FSMContext):
