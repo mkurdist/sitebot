@@ -25,7 +25,17 @@ class WooCommerceService:
                     raise Exception(f"WC API Error {response.status}: {text}")
                 return await response.json()
 
-    # --- توابع جدید برای داشبورد شیشه‌ای ---
+    # --- خواندن لیست دسته‌بندی‌های سایت ---
+    async def get_categories(self):
+        url = f"{self.base_url}/wp-json/wc/v3/products/categories"
+        params = {"per_page": 100, "hide_empty": False} # دریافت تا ۱۰۰ دسته
+        async with aiohttp.ClientSession(auth=self.auth) as session:
+            async with session.get(url, params=params) as response:
+                if response.status != 200:
+                    text = await response.text()
+                    raise Exception(f"WC API Error {response.status}: {text}")
+                return await response.json()
+
     async def get_product(self, product_id: int):
         url = f"{self.base_url}/wp-json/wc/v3/products/{product_id}"
         async with aiohttp.ClientSession(auth=self.auth) as session:
