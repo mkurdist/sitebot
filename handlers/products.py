@@ -32,13 +32,59 @@ def get_dashboard_keyboard(product_id: int, product_name: str) -> InlineKeyboard
     ])
 
 # ==========================================
-# شروع عملیات ثبت محصول
+# شروع عملیات ثبت محصول (محافظت‌شده با سیستم نگهبان)
 # ==========================================
 @router.message(F.text == "➕ محصول جدید")
 async def start_product_wizard(message: Message, state: FSMContext):
+    data = await state.get_data()
+    active_product_id = data.get("product_id")
+    active_product_name = data.get("product_name")
+
+    # اگر کاربر محصول نیمه‌کاره‌ای در حافظه داشت، به او هشدار می‌دهیم
+    if active_product_id:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔄 ادامه ویرایش قبلی", callback_data=f"resume_prod_{active_product_id}"),
+                InlineKeyboardButton(text="➕ ساخت جدید", callback_data="force_new_prod")
+            ]
+        ])
+        await message.answer(
+            f"⚠️ **شما یک محصول در حال ویرایش دارید!**\n\n"
+            f"🏷 نام: {active_product_name or 'بدون نام'}\n"
+            f"🆔 آیدی: {active_product_id}\n\n"
+            f"می‌خواهید کار روی این محصول را ادامه دهید یا محصول جدیدی بسازید؟",
+            reply_markup=keyboard
+        )
+        return
+
+    # در غیر این صورت مستقیماً مراحل ساخت جدید شروع می‌شود
     await state.clear()
     await state.set_state(ProductWizard.waiting_for_name)
     await message.answer("🛒 **ساخت محصول جدید**\n\nلطفاً فقط **نام محصول** را وارد کنید (مثلاً کاسه سفالی میناکاری):")
+
+@router.callback_query(F.data == "force_new_prod")
+async def force_new_product(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await state.set_state(ProductWizard.waiting_for_name)
+    await callback.message.edit_text("🛒 **ساخت محصول جدید**\n\nلطفاً فقط **نام محصول** را وارد کنید (مثلاً کاسه سفالی میناکاری):")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("resume_prod_"))
+async def resume_product(callback: CallbackQuery, state: FSMContext):
+    product_id = int(callback.data.split("_")[2])
+    try:
+        product = await wc_service.get_product(product_id)
+        await state.update_data(product_id=product_id, product_name=product['name'])
+        await callback.message.edit_text(
+            f"📦 **بازگشت به ویرایش محصول**\n\n"
+            f"🏷 **نام:** {product['name']}\n"
+            f"🆔 **آیدی:** {product_id}\n\n"
+            f"👇 از پنل زیر استفاده کنید:",
+            reply_markup=get_dashboard_keyboard(product_id, product['name'])
+        )
+    except Exception as e:
+        await callback.message.edit_text(f"❌ خطا در بازیابی محصول:\n{str(e)[:500]}")
+    await callback.answer()
 
 @router.message(F.text == "/cancel")
 async def cancel_wizard(message: Message, state: FSMContext):
@@ -53,6 +99,10 @@ async def process_initial_name(message: Message, state: FSMContext):
         product_data = {"name": product_name, "type": "simple", "status": "draft"}
         result = await wc_service.create_simple_product(product_data)
         product_id = result['id']
+        
+        # ذخیره آیدی و نام در State برای محافظت در برابر گم شدن
+        await state.update_data(product_id=product_id, product_name=product_name)
+        
         text = (
             f"📦 **محصول ایجاد شد (پیش‌نویس)**\n\n"
             f"🏷 **نام:** {product_name}\n"
@@ -60,7 +110,8 @@ async def process_initial_name(message: Message, state: FSMContext):
             f"👇 حالا از پنل زیر، هر بخشی را که می‌خواهید تکمیل کنید:"
         )
         await wait_msg.edit_text(text, reply_markup=get_dashboard_keyboard(product_id, product_name))
-        await state.clear()
+        
+        # نکته: state رو کامل پاک نمی‌کنیم تا product_id و product_name برای دکمه‌های شیشه‌ای ذخیره بماند
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ساخت پیش‌نویس:\n{str(e)[:500]}")
         await state.clear()
@@ -69,11 +120,12 @@ async def process_initial_name(message: Message, state: FSMContext):
 # مدیریت دکمه‌های انتشار و حذف
 # ==========================================
 @router.callback_query(F.data.startswith("publish_"))
-async def process_publish(callback: CallbackQuery):
+async def process_publish(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[1])
     await callback.message.edit_text("⏳ در حال انتشار روی سایت...")
     try:
         result = await wc_service.update_product(product_id, {"status": "publish"})
+        await state.clear() # با انتشار موفق، حافظه موقت پاک می‌شود
         await callback.message.edit_text(
             f"✅ **محصول با موفقیت در سایت منتشر شد! 🎉**\n\n"
             f"🌐 [برای مشاهده صفحه محصول کلیک کنید]({result['permalink']})",
@@ -83,11 +135,12 @@ async def process_publish(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ خطا در انتشار:\n{str(e)[:500]}")
 
 @router.callback_query(F.data.startswith("delete_"))
-async def process_delete(callback: CallbackQuery):
+async def process_delete(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[1])
     await callback.message.edit_text("⏳ در حال انتقال به زباله‌دان...")
     try:
         await wc_service.delete_product(product_id)
+        await state.clear() # با حذف محصول، حافظه موقت پاک می‌شود
         await callback.message.edit_text(f"🗑 محصول با موفقیت به زباله‌دان سایت منتقل شد.")
     except Exception as e:
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
@@ -124,7 +177,7 @@ async def process_gallery_image_file(message: Message, state: FSMContext):
             file_id = doc.file_id
             
     if not file_id:
-        await message.answer("❌ فرمت فایل معتبر نیست. لطفاً یک تصویر ارسال کنید.")
+        await message.answer("❌ فرمت فایل ارسالی معتبر نیست. لطفاً یک تصویر ارسال کنید.")
         return
 
     await state.update_data(gallery_file_id=file_id)
@@ -154,13 +207,9 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
         file_info = await bot.get_file(file_id)
         file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
         
-        # ۱. دریافت اطلاعات محصول برای استخراج گالری‌های قبلی
         product = await wc_service.get_product(product_id)
-        
-        # استخراج آیدی‌های گالری موجود از محصول
         existing_gallery_ids = product.get('gallery_image_ids', [])
         
-        # ۲. موقتاً تصویر را به لیست تصاویر محصول اضافه می‌کنیم تا وردپرس آن را در رسانه ذخیره کرده و به آن ID بدهد
         current_images = product.get('images', [])
         new_img_payload = {
             "src": file_url,
@@ -169,18 +218,13 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
         }
         current_images.append(new_img_payload)
         
-        # آپدیت موقت برای نشستن عکس در رسانه وردپرس
         update_res = await wc_service.update_product(product_id, {"images": current_images})
-        
-        # ۳. دریافت آیدی جدیدترین تصویر ثبت‌شده در رسانه
         updated_images = update_res.get('images', [])
         if updated_images:
             new_image_id = updated_images[-1].get('id')
             if new_image_id and new_image_id not in existing_gallery_ids:
                 existing_gallery_ids.append(new_image_id)
                 
-            # ۴. ثبت نهایی آیدی‌ها در فیلد گالری محصول و بازگرداندن تصاویر اصلی سر جای خود
-            # (تصویر اول عکس شاخص است، بقیه گالری می‌شوند)
             main_image = current_images[0] if current_images else None
             final_images_payload = [main_image] if main_image else []
             
@@ -207,7 +251,6 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("finish_gallery_"))
 async def finish_gallery_selection(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[2])
-    await state.clear()
     wait_msg = await callback.message.edit_text("⏳ در حال بارگذاری داشبورد...")
     try:
         product = await wc_service.get_product(product_id)
@@ -296,10 +339,8 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
             f"✅ **تصویر اصلی با مشخصات کامل ثبت شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, updated_product['name'])
         )
-        await state.clear()
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت تصویر:\n{str(e)[:500]}")
-        await state.clear()
 
 # ==========================================
 # دکمه: تنظیمات سئو 🔍 (Rank Math پیشرفته + Slug)
@@ -359,10 +400,8 @@ async def process_seo_desc(message: Message, state: FSMContext):
             f"✅ **اطلاعات سئو و پیوند دایمی با موفقیت ثبت شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
-        await state.clear()
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
-        await state.clear()
 
 # ==========================================
 # دکمه: دسته‌بندی 📂 (چندتایی + اصلی)
@@ -467,15 +506,12 @@ async def process_set_primary_cat(callback: CallbackQuery, state: FSMContext):
             f"✅ **دسته‌بندی‌ها ثبت شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
-        await state.clear()
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت دسته‌بندی:\n{str(e)[:500]}")
-        await state.clear()
 
 @router.callback_query(F.data.startswith("backdash_"))
 async def process_backdash(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[1])
-    await state.clear()
     wait_msg = await callback.message.edit_text("⏳ در حال بازگشت...")
     try:
         product = await wc_service.get_product(product_id)
@@ -519,10 +555,8 @@ async def process_long_desc(message: Message, state: FSMContext):
             f"✅ **توضیحات محصول ذخیره شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
-        await state.clear()
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت توضیحات:\n{str(e)[:500]}")
-        await state.clear()
 
 # ==========================================
 # دکمه: قیمت و موجودی 💰
@@ -561,7 +595,5 @@ async def process_stock(message: Message, state: FSMContext):
             f"✅ **قیمت و موجودی تنظیم شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
-        await state.clear()
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در تنظیم قیمت:\n{str(e)[:500]}")
-        await state.clear()
