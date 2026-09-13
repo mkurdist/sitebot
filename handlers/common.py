@@ -14,9 +14,9 @@ async def cmd_start(message: Message):
     # طراحی دکمه‌های کیبورد پایین صفحه
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ محصول جدید"), KeyboardButton(text="📝 مقاله جدید")],
+            [KeyboardButton(text="⚡ افزودن خودکار (AI)"), KeyboardButton(text="➕ محصول جدید")],
             [KeyboardButton(text="🛍 محصولات سایت"), KeyboardButton(text="📦 آخرین سفارش‌ها")],
-            [KeyboardButton(text="⚙️ تنظیمات")]
+            [KeyboardButton(text="📝 مقاله جدید"), KeyboardButton(text="⚙️ تنظیمات")]
         ],
         resize_keyboard=True,
         input_field_placeholder="یک گزینه را انتخاب کنید..."
