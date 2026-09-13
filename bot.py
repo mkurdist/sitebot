@@ -7,6 +7,7 @@ from config import BOT_TOKEN
 # ایمپورت کردن ماژول‌هایی که ساختیم
 from utils.security import AdminOnlyMiddleware
 from handlers.common import router as common_router
+from handlers.products import router as products_router  # <--- این خط اضافه شد
 
 # یک صفحه ساده برای اینکه رندر متوجه شود سرور وب ما روشن است
 async def health_check(request):
@@ -22,6 +23,9 @@ async def main():
 
     # اضافه کردن روتر منوی اصلی
     dp.include_router(common_router)
+    
+    # اضافه کردن روتر ثبت محصول
+    dp.include_router(products_router)  # <--- این خط اضافه شد
 
     # ==========================================
     # راه‌اندازی سرور وب (برای رفع خطای پورت رندر)
