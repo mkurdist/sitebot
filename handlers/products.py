@@ -93,7 +93,7 @@ async def process_delete(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
 
 # ==========================================
-# دکمه: گالری تصاویر 🗂 (افزودن عکس به گالری)
+# دکمه: گالری تصاویر 🗂 (نسخه اصلاح‌شده برای اتصال دقیق آیدی به گالری ووکامرس)
 # ==========================================
 @router.callback_query(F.data.startswith("edit_gallery_"))
 async def start_edit_gallery(callback: CallbackQuery, state: FSMContext):
@@ -106,9 +106,9 @@ async def start_edit_gallery(callback: CallbackQuery, state: FSMContext):
     ])
     
     await callback.message.answer(
-        "🗂 **افزودن تصویر به گالری**\n\n"
+        "🗂 **افزودن تصویر به گالری محصول**\n\n"
         "لطفاً عکس مورد نظر گالری را بفرستید (عکس معمولی یا فایل WebP).\n"
-        "هرچندتا عکس که خواستید می‌توانید بفرستید و در نهایت روی دکمه اتمام کلیک کنید:",
+        "می‌توانید چند عکس به نوبت بفرستید و در نهایت روی دکمه اتمام کلیک کنید:",
         reply_markup=keyboard
     )
     await callback.answer()
@@ -149,26 +149,46 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
     file_id = data['gallery_file_id']
     alt_text = data['gallery_alt']
     
-    wait_msg = await message.answer("⏳ در حال آپلود و افزودن عکس به گالری سایت...")
+    wait_msg = await message.answer("⏳ در حال آپلود و اتصال به گالری محصول...")
     try:
         file_info = await bot.get_file(file_id)
         file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
         
-        # دریافت اطلاعات فعلی محصول برای حفظ تصاویر قبلی (اصلی و گالری‌های قبلی)
+        # ۱. دریافت اطلاعات محصول برای استخراج گالری‌های قبلی
         product = await wc_service.get_product(product_id)
-        existing_images = product.get('images', [])
         
-        # اضافه کردن عکس جدید به لیست تصاویر موجود
-        new_gallery_image = {
+        # استخراج آیدی‌های گالری موجود از محصول
+        existing_gallery_ids = product.get('gallery_image_ids', [])
+        
+        # ۲. موقتاً تصویر را به لیست تصاویر محصول اضافه می‌کنیم تا وردپرس آن را در رسانه ذخیره کرده و به آن ID بدهد
+        current_images = product.get('images', [])
+        new_img_payload = {
             "src": file_url,
             "name": title_text,
             "alt": alt_text
         }
-        existing_images.append(new_gallery_image)
+        current_images.append(new_img_payload)
         
-        await wc_service.update_product(product_id, {"images": existing_images})
+        # آپدیت موقت برای نشستن عکس در رسانه وردپرس
+        update_res = await wc_service.update_product(product_id, {"images": current_images})
         
-        # بازگرداندن وضعیت به انتظار برای عکس بعدی گالری
+        # ۳. دریافت آیدی جدیدترین تصویر ثبت‌شده در رسانه
+        updated_images = update_res.get('images', [])
+        if updated_images:
+            new_image_id = updated_images[-1].get('id')
+            if new_image_id and new_image_id not in existing_gallery_ids:
+                existing_gallery_ids.append(new_image_id)
+                
+            # ۴. ثبت نهایی آیدی‌ها در فیلد گالری محصول و بازگرداندن تصاویر اصلی سر جای خود
+            # (تصویر اول عکس شاخص است، بقیه گالری می‌شوند)
+            main_image = current_images[0] if current_images else None
+            final_images_payload = [main_image] if main_image else []
+            
+            await wc_service.update_product(product_id, {
+                "images": final_images_payload,
+                "gallery_image_ids": existing_gallery_ids
+            })
+
         await state.set_state(ProductWizard.waiting_for_gallery_image)
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -176,12 +196,12 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
         ])
         
         await wait_msg.edit_text(
-            f"✅ **این عکس با موفقیت به گالری اضافه شد!**\n\n"
+            f"✅ **عکس با موفقیت به گالری محصول متصل شد!**\n\n"
             f"اگر عکس دیگری برای گالری دارید بفرستید، در غیر این صورت روی دکمه زیر کلیک کنید:",
             reply_markup=keyboard
         )
     except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در افزودن به گالری:\n{str(e)[:500]}")
+        await wait_msg.edit_text(f"❌ خطا در ثبت گالری:\n{str(e)[:500]}")
         await state.set_state(ProductWizard.waiting_for_gallery_image)
 
 @router.callback_query(F.data.startswith("finish_gallery_"))
@@ -253,7 +273,6 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
         file_info = await bot.get_file(file_id)
         file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
         
-        # دریافت تصاویر قبلی برای حفظ گالری‌های موجود در صورت تنظیم عکس اصلی جدید
         product = await wc_service.get_product(product_id)
         existing_images = product.get('images', [])
         
@@ -263,7 +282,6 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
             "alt": alt_text
         }
         
-        # اگر عکسی وجود داشت، تصویر اول را جایگزین می‌کنیم و مابقی (گالری) را حفظ می‌کنیم
         if existing_images:
             existing_images[0] = main_image
         else:
