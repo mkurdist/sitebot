@@ -1,54 +1,56 @@
-import aiohttp
-from config import WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
+import asyncio
+import os
+from aiohttp import web
+from aiogram import Bot, Dispatcher
+from config import BOT_TOKEN
 
-class WooCommerceService:
-    def __init__(self):
-        self.base_url = WC_URL
-        self.auth = aiohttp.BasicAuth(WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
+# ایمپورت کردن ماژول‌هایی که ساختیم
+from utils.security import AdminOnlyMiddleware
+from handlers.common import router as common_router
+from handlers.products import router as products_router  # <--- این خط اضافه شد
 
-    async def get_latest_products(self, per_page=3):
-        url = f"{self.base_url}/wp-json/wc/v3/products"
-        params = {"per_page": per_page, "orderby": "date", "order": "desc"}
-        async with aiohttp.ClientSession(auth=self.auth) as session:
-            async with session.get(url, params=params) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"WC API Error {response.status}: {text}")
-                return await response.json()
+# یک صفحه ساده برای اینکه رندر متوجه شود سرور وب ما روشن است
+async def health_check(request):
+    return web.Response(text="🏺 CitySofal Bot is Live and Running!")
 
-    async def create_simple_product(self, data: dict):
-        url = f"{self.base_url}/wp-json/wc/v3/products"
-        async with aiohttp.ClientSession(auth=self.auth) as session:
-            async with session.post(url, json=data) as response:
-                if response.status not in [200, 201]:
-                    text = await response.text()
-                    raise Exception(f"WC API Error {response.status}: {text}")
-                return await response.json()
+async def main():
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher()
 
-    # --- توابع جدید برای داشبورد شیشه‌ای ---
-    async def get_product(self, product_id: int):
-        url = f"{self.base_url}/wp-json/wc/v3/products/{product_id}"
-        async with aiohttp.ClientSession(auth=self.auth) as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"WC API Error {response.status}: {text}")
-                return await response.json()
+    # فعال‌سازی دیوار آتشین
+    dp.message.middleware(AdminOnlyMiddleware())
+    dp.callback_query.middleware(AdminOnlyMiddleware())
 
-    async def update_product(self, product_id: int, data: dict):
-        url = f"{self.base_url}/wp-json/wc/v3/products/{product_id}"
-        async with aiohttp.ClientSession(auth=self.auth) as session:
-            async with session.put(url, json=data) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"WC API Error {response.status}: {text}")
-                return await response.json()
+    # اضافه کردن روتر منوی اصلی
+    dp.include_router(common_router)
+    
+    # اضافه کردن روتر ثبت محصول
+    dp.include_router(products_router)  # <--- این خط اضافه شد
 
-    async def delete_product(self, product_id: int):
-        url = f"{self.base_url}/wp-json/wc/v3/products/{product_id}"
-        async with aiohttp.ClientSession(auth=self.auth) as session:
-            async with session.delete(url) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"WC API Error {response.status}: {text}")
-                return await response.json()
+    # ==========================================
+    # راه‌اندازی سرور وب (برای رفع خطای پورت رندر)
+    # ==========================================
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    # رندر پورت اختصاصی خود را از طریق متغیر محیطی PORT ارسال می‌کند
+    # اگر پورتی نبود، از 8080 استفاده می‌کنیم
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    print(f"🌐 Web server started on port {port}")
+    print("🚀 Bot is running with Modular Architecture...")
+    
+    try:
+        # اجرای ربات (Long Polling) همزمان با سرور وب
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        await runner.cleanup()
+
+if __name__ == "__main__":
+    asyncio.run(main())
