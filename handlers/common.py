@@ -15,7 +15,7 @@ async def cmd_start(message: Message):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ محصول جدید"), KeyboardButton(text="📝 مقاله جدید")],
-            [KeyboardButton(text="🛍 محصولات سایت"), KeyboardButton(text="📦 سفارش‌های اخیر")],
+            [KeyboardButton(text="🛍 محصولات سایت"), KeyboardButton(text="📦 آخرین سفارش‌ها")],
             [KeyboardButton(text="⚙️ تنظیمات")]
         ],
         resize_keyboard=True,
