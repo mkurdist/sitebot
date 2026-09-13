@@ -92,7 +92,92 @@ async def process_delete(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
 
 # ==========================================
-# سیستم پیشرفته دسته‌بندی (چندتایی + اصلی) 📂
+# سیستم پیشرفته تصویر اصلی 🖼 (پشتیبانی از WebP / فایل و عکس + Alt و Title)
+# ==========================================
+@router.callback_query(F.data.startswith("edit_img_"))
+async def start_edit_img(callback: CallbackQuery, state: FSMContext):
+    product_id = int(callback.data.split("_")[2])
+    await state.update_data(product_id=product_id)
+    await state.set_state(ProductWizard.waiting_for_image)
+    await callback.message.answer(
+        "🖼 **آپلود تصویر اصلی**\n\n"
+        "لطفاً تصویر خود را بفرستید.\n"
+        "*(نکته: هم می‌توانید به صورت عکس معمولی بفرستید و هم به صورت فایل/Document با فرمت webp)*"
+    )
+    await callback.answer()
+
+# دریافت عکس به صورت فتو یا فایل (WebP و...)
+@router.message(ProductWizard.waiting_for_image, F.photo | F.document)
+async def process_image_file(message: Message, state: FSMContext, bot: Bot):
+    file_id = None
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        # بررسی فرمت‌های تصویری رایج از جمله webp
+        doc = message.document
+        if doc.mime_type and "image" in doc.mime_type or doc.file_name.lower().endswith(('.webp', '.png', '.jpg', '.jpeg')):
+            file_id = doc.file_id
+            
+    if not file_id:
+        await message.answer("❌ فرمت فایل ارسالی معتبر نیست. لطفاً یک تصویر (عکس یا فایل تصویری webp/png/jpg) بفرستید.")
+        return
+
+    # ذخیره آیدی فایل در حافظه
+    await state.update_data(file_id=file_id)
+    await state.set_state(ProductWizard.waiting_for_image_alt)
+    await message.answer("📝 لطفاً **متن جایگزین (Alt Text)** تصویر را وارد کنید (برای سئو):")
+
+@router.message(ProductWizard.waiting_for_image)
+async def process_image_invalid(message: Message):
+    await message.answer("❌ لطفاً حتماً یک تصویر یا فایل تصویری ارسال کنید.")
+
+@router.message(ProductWizard.waiting_for_image_alt)
+async def process_image_alt(message: Message, state: FSMContext):
+    await state.update_data(alt_text=message.text)
+    await state.set_state(ProductWizard.waiting_for_image_title)
+    await message.answer("🏷 حالا **عنوان تصویر (Title)** را وارد کنید:")
+
+@router.message(ProductWizard.waiting_for_image_title)
+async def process_image_title(message: Message, state: FSMContext, bot: Bot):
+    title_text = message.text
+    data = await state.get_data()
+    product_id = data['product_id']
+    file_id = data['file_id']
+    alt_text = data['alt_text']
+    
+    wait_msg = await message.answer("⏳ در حال پردازش و آپلود تصویر در سایت...")
+    try:
+        file_info = await bot.get_file(file_id)
+        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+        
+        # تنظیم تصویر همراه با Alt و Title اختصاصی شما
+        update_data = {
+            "images": [
+                {
+                    "src": file_url,
+                    "name": title_text,
+                    "alt": alt_text
+                }
+            ]
+        }
+        
+        await wc_service.update_product(product_id, update_data)
+        product = await wc_service.get_product(product_id)
+        
+        await wait_msg.edit_text(
+            f"✅ **تصویر با مشخصات کامل در سایت ثبت شد!**\n\n"
+            f"📌 **عنوان:** {title_text}\n"
+            f"🔍 **متن جایگزین:** {alt_text}\n\n"
+            f"👇 داشبورد محصول:",
+            reply_markup=get_dashboard_keyboard(product_id, product['name'])
+        )
+        await state.clear()
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در ثبت تصویر:\n{str(e)[:500]}")
+        await state.clear()
+
+# ==========================================
+# دکمه: دسته‌بندی 📂 (چندتایی + اصلی)
 # ==========================================
 @router.callback_query(F.data.startswith("edit_cat_"))
 async def start_edit_cat(callback: CallbackQuery, state: FSMContext):
@@ -100,7 +185,6 @@ async def start_edit_cat(callback: CallbackQuery, state: FSMContext):
     wait_msg = await callback.message.edit_text("⏳ در حال دریافت لیست دسته‌بندی‌ها از سایت...")
     try:
         categories = await wc_service.get_categories()
-        # ذخیره لیست دسته‌ها در حافظه و شروع با لیست خالی انتخاب‌ها
         await state.update_data(product_id=product_id, all_cats=categories, selected_cats=[])
         
         builder = InlineKeyboardBuilder()
@@ -109,11 +193,11 @@ async def start_edit_cat(callback: CallbackQuery, state: FSMContext):
         
         builder.button(text="✅ تایید و ادامه انتخاب دسته اصلی ➡️", callback_data="finish_cat_selection")
         builder.button(text="🔙 بازگشت", callback_data=f"backdash_{product_id}")
-        builder.adjust(1) # هر دسته در یک خط برای خوانایی بهتر چک‌باکس‌ها
+        builder.adjust(1)
         
         await wait_msg.edit_text(
             "📂 **انتخاب دسته‌بندی‌ها:**\n\n"
-            "روی هر دسته کلیک کنید تا انتخاب شود (تیک بخورد). پس از اتمام، روی دکمه تایید کلیک کنید:",
+            "روی هر دسته کلیک کنید تا انتخاب شود. پس از اتمام، روی دکمه تایید کلیک کنید:",
             reply_markup=builder.as_markup()
         )
     except Exception as e:
@@ -134,7 +218,6 @@ async def process_toggle_cat(callback: CallbackQuery, state: FSMContext):
         
     await state.update_data(selected_cats=selected)
     
-    # بازسازی کیبورد با آپدیت وضعیت تیک‌ها
     builder = InlineKeyboardBuilder()
     for cat in all_cats:
         status = "✅" if cat['id'] in selected else "[ ]"
@@ -161,7 +244,6 @@ async def process_finish_cat_selection(callback: CallbackQuery, state: FSMContex
         await callback.answer("❌ لطفاً حداقل یک دسته‌بندی انتخاب کنید!", show_alert=True)
         return
         
-    # مرحله دوم: انتخاب دسته اصلی (Primary) از بین دسته‌های انتخاب شده
     builder = InlineKeyboardBuilder()
     for cat in all_cats:
         if cat['id'] in selected:
@@ -169,7 +251,7 @@ async def process_finish_cat_selection(callback: CallbackQuery, state: FSMContex
             
     builder.adjust(1)
     await callback.message.edit_text(
-        "⭐ حالا **دسته اصلی (Primary)** این محصول را از بین موارد انتخاب‌شده مشخص کنید:",
+        "⭐ حالا **دسته اصلی (Primary)** این محصول را مشخص کنید:",
         reply_markup=builder.as_markup()
     )
 
@@ -182,9 +264,7 @@ async def process_set_primary_cat(callback: CallbackQuery, state: FSMContext):
     
     wait_msg = await callback.message.edit_text("⏳ در حال ثبت دسته‌بندی‌ها و دسته اصلی در سایت...")
     try:
-        # ساخت ساختار دسته‌ها برای ووکامرس
         categories_payload = [{"id": cid} for cid in selected_cats]
-        
         update_data = {
             "categories": categories_payload,
             "meta_data": [
@@ -192,12 +272,11 @@ async def process_set_primary_cat(callback: CallbackQuery, state: FSMContext):
                 {"key": "rank_math_primary_product_cat", "value": str(primary_cat_id)}
             ]
         }
-        
         await wc_service.update_product(product_id, update_data)
         product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
-            f"✅ **دسته‌بندی‌ها و دسته اصلی با موفقیت ثبت شد!**\n\n👇 داشبورد محصول:",
+            f"✅ **دسته‌بندی‌ها ثبت شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
         await state.clear()
@@ -264,44 +343,6 @@ async def process_seo_desc(message: Message, state: FSMContext):
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
         await state.clear()
-
-# ==========================================
-# دکمه: تصویر اصلی 🖼
-# ==========================================
-@router.callback_query(F.data.startswith("edit_img_"))
-async def start_edit_img(callback: CallbackQuery, state: FSMContext):
-    product_id = int(callback.data.split("_")[2])
-    await state.update_data(product_id=product_id)
-    await state.set_state(ProductWizard.waiting_for_image)
-    await callback.message.answer("🖼 لطفاً **عکس محصول** را ارسال کنید (به صورت Photo/تصویر عادی بفرستید):")
-    await callback.answer()
-
-@router.message(ProductWizard.waiting_for_image, F.photo)
-async def process_image(message: Message, state: FSMContext, bot: Bot):
-    data = await state.get_data()
-    product_id = data['product_id']
-    wait_msg = await message.answer("⏳ در حال انتقال تصویر به رسانه سایت (لطفاً کمی صبر کنید)...")
-    try:
-        photo = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-        
-        product = await wc_service.get_product(product_id)
-        update_data = {"images": [{"src": file_url, "name": f"تصویر {product['name']}"}]}
-        await wc_service.update_product(product_id, update_data)
-        
-        await wait_msg.edit_text(
-            f"✅ **تصویر با موفقیت در سایت آپلود و روی محصول تنظیم شد!**\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name'])
-        )
-        await state.clear()
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در آپلود عکس:\n{str(e)[:500]}")
-        await state.clear()
-
-@router.message(ProductWizard.waiting_for_image)
-async def process_image_invalid(message: Message):
-    await message.answer("❌ لطفاً یک عکس معتبر ارسال کنید (از ارسال فایل یا متن خودداری کنید).")
 
 # ==========================================
 # دکمه: توضیحات 📝
