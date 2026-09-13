@@ -25,10 +25,10 @@ class WooCommerceService:
                     raise Exception(f"WC API Error {response.status}: {text}")
                 return await response.json()
 
-    # --- خواندن لیست دسته‌بندی‌های سایت ---
+    # --- اصلاح شده: حذف مقدار بولین برای جلوگیری از خطا ---
     async def get_categories(self):
         url = f"{self.base_url}/wp-json/wc/v3/products/categories"
-        params = {"per_page": 100, "hide_empty": False} # دریافت تا ۱۰۰ دسته
+        params = {"per_page": 50, "hide_empty": "0"} # استفاده از رشته "0" به جای False
         async with aiohttp.ClientSession(auth=self.auth) as session:
             async with session.get(url, params=params) as response:
                 if response.status != 200:
