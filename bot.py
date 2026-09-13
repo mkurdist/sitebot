@@ -3,7 +3,7 @@ import os
 import json
 from aiohttp import web
 from aiogram import Bot, Dispatcher
-from config import BOT_TOKEN, ADMIN_ID  # مطمئن شوید ADMIN_ID در config.py هست یا به جای آن آیدی عددی خود را بگذارید
+from config import BOT_TOKEN, ADMIN_ID
 
 # ایمپورت کردن ماژول‌هایی که ساختیم
 from utils.security import AdminOnlyMiddleware
@@ -15,37 +15,49 @@ async def health_check(request):
     return web.Response(text="🏺 CitySofal Bot is Live and Running!")
 
 # ==========================================
-# دریافت وب‌هوک سفارش از ووکامرس
+# دریافت و بررسی وب‌هوک سفارش از ووکامرس
 # ==========================================
 async def handle_order_webhook(request):
+    bot_instance = request.app['bot']
     try:
-        # خواندن اطلاعات ارسال شده از ووکامرس
         data = await request.json()
         
-        # استخراج اطلاعات کلیدی سفارش
-        order_id = data.get("id")
-        status = data.get("status")
-        total = data.get("total")
+        # ۱. ارسال ساختار خام (Raw JSON) برای تحلیل و بررسی شما در تلگرام
+        raw_json_str = json.dumps(data, indent=2, ensure_ascii=False)
+        # اگر متن خیلی طولانی بود، تلگرام محدودیت پیام دارد، پس آن را تکه تکه یا به عنوان متن ارسال می‌کنیم
+        debug_msg = f"🔍 **[DEBUG] ساختار دریافتی از ووکامرس:**\n<pre>{raw_json_str[:3500]}</pre>"
+        await bot_instance.send_message(
+            chat_id=ADMIN_ID,
+            text=debug_msg,
+            parse_mode="HTML"
+        )
+
+        # ۲. استخراج اطلاعات اصلی سفارش
+        order_id = data.get("id", "تست/نامشخص")
+        status = data.get("status", "نامشخص")
+        total = data.get("total", "0")
         currency = data.get("currency", "تومان")
         
         billing = data.get("billing", {})
-        first_name = billing.get("first_name", "")
+        first_name = billing.get("first_name", "ثبت‌نشده")
         last_name = billing.get("last_name", "")
-        phone = billing.get("phone", "ثبت نشده")
+        phone = billing.get("phone", "ثبت‌نشده")
         city = billing.get("city", "")
         address = billing.get("address_1", "")
         
         line_items = data.get("line_items", [])
         products_list = ""
         for item in line_items:
-            p_name = item.get("name")
-            p_qty = item.get("quantity")
-            p_total = item.get("total")
+            p_name = item.get("name", "محصول")
+            p_qty = item.get("quantity", 1)
+            p_total = item.get("total", "0")
             products_list += f"▫️ {p_name} (تعداد: {p_qty}) - {p_total} {currency}\n"
+            
+        if not products_list:
+            products_list = "▫️ (این درخواست تست یا فاقد لیست محصولات است)\n"
 
-        # ساخت متن فاکتور زیبا برای ارسال به تلگرام
         order_text = (
-            f"🔔 **سفارش جدید در سایت ثبت شد! 🎉**\n\n"
+            f"🔔 **اطلاعیه ووکامرس / سفارش جدید**\n\n"
             f"🆔 **شماره سفارش:** #{order_id}\n"
             f"👤 **مشتری:** {first_name} {last_name}\n"
             f"📞 **شماره تماس:** `{phone}`\n"
@@ -55,20 +67,24 @@ async def handle_order_webhook(request):
             f"📌 **وضعیت:** {status}"
         )
 
-        # ارسال پیام به ادمین از طریق ربات
-        # نکته: برای دسترسی به ربات در این تابع، از متغیر گلوبال یا ساخت نمونه موقت استفاده می‌کنیم
-        bot_instance = request.app['bot']
         await bot_instance.send_message(
-            chat_id=ADMIN_ID,  # آیدی عددی تلگرام شما
+            chat_id=ADMIN_ID,
             text=order_text,
             parse_mode="Markdown"
         )
 
-        return web.json_response({"status": "success", "message": "Order notification sent!"}, status=200)
+        # بازگرداندن کد 200 به ووکامرس برای تایید دریافت موفق
+        return web.json_response({"status": "success"}, status=200)
     
     except Exception as e:
-        print(f"Webhook Error: {str(e)}")
-        return web.json_response({"error": str(e)}, status=400)
+        error_msg = f"❌ خطای وب‌هوک: {str(e)}"
+        print(error_msg)
+        try:
+            await bot_instance.send_message(chat_id=ADMIN_ID, text=error_msg)
+        except:
+            pass
+        # همیشه کد 200 برمی‌گردانیم تا ووکامرس خطای 400 ندهد
+        return web.json_response({"status": "error", "message": str(e)}, status=200)
 
 async def main():
     bot = Bot(token=BOT_TOKEN)
@@ -82,16 +98,12 @@ async def main():
     dp.include_router(common_router)
     dp.include_router(products_router)
 
-    # ==========================================
-    # راه‌اندازی سرور وب (همراه با مسیر وب‌هوک سفارش)
-    # ==========================================
+    # راه‌اندازی سرور وب
     app = web.Application()
-    
-    # ذخیره نمونه ربات در اپلیکیشن برای استفاده در وب‌هوک
     app['bot'] = bot
     
     app.router.add_get('/', health_check)
-    app.router.add_post('/webhook/order', handle_order_webhook) # <--- مسیر دریافت سفارشات
+    app.router.add_post('/webhook/order', handle_order_webhook)
     
     runner = web.AppRunner(app)
     await runner.setup()
