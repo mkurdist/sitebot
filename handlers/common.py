@@ -1,9 +1,13 @@
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart
+from services.woocommerce import WooCommerceService
 
 # ساخت یک روتر برای مدیریت پیام‌های عمومی
 router = Router()
+
+# نمونه‌سازی از سرویس ووکامرس
+wc_service = WooCommerceService()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -24,11 +28,6 @@ async def cmd_start(message: Message):
         reply_markup=keyboard
     )
 
-from aiogram import F
-from services.woocommerce import WooCommerceService
-
-wc_service = WooCommerceService()
-
 # این هندلر زمانی اجرا می‌شود که متن پیام شامل کلمه "محصولات سایت" باشد
 @router.message(F.text.contains("محصولات سایت"))
 async def test_get_products(message: Message):
@@ -43,7 +42,7 @@ async def test_get_products(message: Message):
             await wait_msg.edit_text("محصولی یافت نشد.")
             return
             
-        text = "🛍 **۳ محصول آخر سایت شما:**\n\n"
+        text = "🛍 ۳ محصول آخر سایت شما:\n\n"
         for p in products:
             # بررسی اینکه آیا محصول قیمت دارد یا خیر
             price = p.get('price', 'نامشخص')
