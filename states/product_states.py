@@ -9,11 +9,12 @@ class ProductWizard(StatesGroup):
     waiting_for_short_desc = State()
     waiting_for_long_desc = State()
     
-    # وضعیت‌های جدید برای بخش تصویر پیشرفته
     waiting_for_image = State()
     waiting_for_image_alt = State()
     waiting_for_image_title = State()
     
+    # وضعیت‌های کامل سئو (شامل پیوند دایمی / Slug)
     waiting_for_seo_keyword = State()
+    waiting_for_seo_slug = State()
     waiting_for_seo_title = State()
     waiting_for_seo_desc = State()
