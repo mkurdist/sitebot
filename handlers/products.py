@@ -92,49 +92,127 @@ async def process_delete(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
 
 # ==========================================
-# دکمه: دسته‌بندی 📂
+# سیستم پیشرفته دسته‌بندی (چندتایی + اصلی) 📂
 # ==========================================
 @router.callback_query(F.data.startswith("edit_cat_"))
-async def start_edit_cat(callback: CallbackQuery):
+async def start_edit_cat(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[2])
     wait_msg = await callback.message.edit_text("⏳ در حال دریافت لیست دسته‌بندی‌ها از سایت...")
     try:
         categories = await wc_service.get_categories()
+        # ذخیره لیست دسته‌ها در حافظه و شروع با لیست خالی انتخاب‌ها
+        await state.update_data(product_id=product_id, all_cats=categories, selected_cats=[])
+        
         builder = InlineKeyboardBuilder()
         for cat in categories:
-            builder.button(text=cat['name'], callback_data=f"setcat_{product_id}_{cat['id']}")
+            builder.button(text=f"[ ] {cat['name']}", callback_data=f"togglecat_{cat['id']}")
         
-        # دکمه بازگشت به داشبورد
-        builder.button(text="🔙 بازگشت به داشبورد", callback_data=f"backdash_{product_id}")
-        builder.adjust(2) # نمایش دو دکمه در هر ردیف
+        builder.button(text="✅ تایید و ادامه انتخاب دسته اصلی ➡️", callback_data="finish_cat_selection")
+        builder.button(text="🔙 بازگشت", callback_data=f"backdash_{product_id}")
+        builder.adjust(1) # هر دسته در یک خط برای خوانایی بهتر چک‌باکس‌ها
         
-        await wait_msg.edit_text("📂 لطفاً **یک دسته‌بندی** را برای این محصول انتخاب کنید:", reply_markup=builder.as_markup())
+        await wait_msg.edit_text(
+            "📂 **انتخاب دسته‌بندی‌ها:**\n\n"
+            "روی هر دسته کلیک کنید تا انتخاب شود (تیک بخورد). پس از اتمام، روی دکمه تایید کلیک کنید:",
+            reply_markup=builder.as_markup()
+        )
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در دریافت دسته‌بندی:\n{str(e)[:500]}")
 
-@router.callback_query(F.data.startswith("setcat_"))
-async def process_set_cat(callback: CallbackQuery):
-    parts = callback.data.split("_")
-    product_id, cat_id = int(parts[1]), int(parts[2])
-    await callback.message.edit_text("⏳ در حال ثبت دسته‌بندی...")
+@router.callback_query(F.data.startswith("togglecat_"))
+async def process_toggle_cat(callback: CallbackQuery, state: FSMContext):
+    cat_id = int(callback.data.split("_")[1])
+    data = await state.get_data()
+    selected = data.get("selected_cats", [])
+    all_cats = data.get("all_cats", [])
+    product_id = data.get("product_id")
+    
+    if cat_id in selected:
+        selected.remove(cat_id)
+    else:
+        selected.append(cat_id)
+        
+    await state.update_data(selected_cats=selected)
+    
+    # بازسازی کیبورد با آپدیت وضعیت تیک‌ها
+    builder = InlineKeyboardBuilder()
+    for cat in all_cats:
+        status = "✅" if cat['id'] in selected else "[ ]"
+        builder.button(text=f"{status} {cat['name']}", callback_data=f"togglecat_{cat['id']}")
+        
+    builder.button(text="✅ تایید و ادامه انتخاب دسته اصلی ➡️", callback_data="finish_cat_selection")
+    builder.button(text="🔙 بازگشت", callback_data=f"backdash_{product_id}")
+    builder.adjust(1)
+    
     try:
-        update_data = {"categories": [{"id": cat_id}]}
+        await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+    except:
+        pass
+    await callback.answer()
+
+@router.callback_query(F.data == "finish_cat_selection")
+async def process_finish_cat_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_cats", [])
+    product_id = data.get("product_id")
+    all_cats = data.get("all_cats", [])
+    
+    if not selected:
+        await callback.answer("❌ لطفاً حداقل یک دسته‌بندی انتخاب کنید!", show_alert=True)
+        return
+        
+    # مرحله دوم: انتخاب دسته اصلی (Primary) از بین دسته‌های انتخاب شده
+    builder = InlineKeyboardBuilder()
+    for cat in all_cats:
+        if cat['id'] in selected:
+            builder.button(text=cat['name'], callback_data=f"setprimary_{cat['id']}")
+            
+    builder.adjust(1)
+    await callback.message.edit_text(
+        "⭐ حالا **دسته اصلی (Primary)** این محصول را از بین موارد انتخاب‌شده مشخص کنید:",
+        reply_markup=builder.as_markup()
+    )
+
+@router.callback_query(F.data.startswith("setprimary_"))
+async def process_set_primary_cat(callback: CallbackQuery, state: FSMContext):
+    primary_cat_id = int(callback.data.split("_")[1])
+    data = await state.get_data()
+    product_id = data.get("product_id")
+    selected_cats = data.get("selected_cats", [])
+    
+    wait_msg = await callback.message.edit_text("⏳ در حال ثبت دسته‌بندی‌ها و دسته اصلی در سایت...")
+    try:
+        # ساخت ساختار دسته‌ها برای ووکامرس
+        categories_payload = [{"id": cid} for cid in selected_cats]
+        
+        update_data = {
+            "categories": categories_payload,
+            "meta_data": [
+                {"key": "_yoast_wpseo_primary_product_cat", "value": str(primary_cat_id)},
+                {"key": "rank_math_primary_product_cat", "value": str(primary_cat_id)}
+            ]
+        }
+        
         await wc_service.update_product(product_id, update_data)
         product = await wc_service.get_product(product_id)
-        await callback.message.edit_text(
-            f"✅ **دسته‌بندی ثبت شد!**\n\n👇 داشبورد محصول:",
+        
+        await wait_msg.edit_text(
+            f"✅ **دسته‌بندی‌ها و دسته اصلی با موفقیت ثبت شد!**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
+        await state.clear()
     except Exception as e:
-        await callback.message.edit_text(f"❌ خطا در ثبت دسته‌بندی:\n{str(e)[:500]}")
+        await wait_msg.edit_text(f"❌ خطا در ثبت دسته‌بندی:\n{str(e)[:500]}")
+        await state.clear()
 
 @router.callback_query(F.data.startswith("backdash_"))
-async def process_backdash(callback: CallbackQuery):
+async def process_backdash(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[1])
-    await callback.message.edit_text("⏳ در حال بازگشت...")
+    await state.clear()
+    wait_msg = await callback.message.edit_text("⏳ در حال بازگشت...")
     try:
         product = await wc_service.get_product(product_id)
-        await callback.message.edit_text(
+        await wait_msg.edit_text(
             f"👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
