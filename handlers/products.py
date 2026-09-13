@@ -9,7 +9,7 @@ router = Router()
 wc_service = WooCommerceService()
 
 # ==========================================
-# کیبورد داشبورد شیشه‌ای
+# کیبورد داشبورد شیشه‌ای (ارتقا یافته با گالری)
 # ==========================================
 def get_dashboard_keyboard(product_id: int, product_name: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -18,11 +18,12 @@ def get_dashboard_keyboard(product_id: int, product_name: str) -> InlineKeyboard
             InlineKeyboardButton(text="🖼 تصویر اصلی", callback_data=f"edit_img_{product_id}")
         ],
         [
-            InlineKeyboardButton(text="💰 قیمت و موجودی", callback_data=f"edit_price_{product_id}"),
+            InlineKeyboardButton(text="🗂 گالری تصاویر", callback_data=f"edit_gallery_{product_id}"),
             InlineKeyboardButton(text="📂 دسته‌بندی", callback_data=f"edit_cat_{product_id}")
         ],
         [
-            InlineKeyboardButton(text="🔍 تنظیمات سئو (Rank Math)", callback_data=f"edit_seo_{product_id}")
+            InlineKeyboardButton(text="💰 قیمت و موجودی", callback_data=f"edit_price_{product_id}"),
+            InlineKeyboardButton(text="🔍 تنظیمات سئو", callback_data=f"edit_seo_{product_id}")
         ],
         [
             InlineKeyboardButton(text="✅ انتشار نهایی", callback_data=f"publish_{product_id}"),
@@ -92,68 +93,110 @@ async def process_delete(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
 
 # ==========================================
-# دکمه: تنظیمات سئو 🔍 (Rank Math پیشرفته + Slug)
+# دکمه: گالری تصاویر 🗂 (افزودن عکس به گالری)
 # ==========================================
-@router.callback_query(F.data.startswith("edit_seo_"))
-async def start_edit_seo(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("edit_gallery_"))
+async def start_edit_gallery(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[2])
     await state.update_data(product_id=product_id)
-    await state.set_state(ProductWizard.waiting_for_seo_keyword)
-    await callback.message.answer("🔍 **تنظیمات سئو (Rank Math)**\n\nابتدا **کلمه کلیدی اصلی** (Focus Keyword) را وارد کنید:")
+    await state.set_state(ProductWizard.waiting_for_gallery_image)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 اتمام و بازگشت به داشبورد", callback_data=f"finish_gallery_{product_id}")]
+    ])
+    
+    await callback.message.answer(
+        "🗂 **افزودن تصویر به گالری**\n\n"
+        "لطفاً عکس مورد نظر گالری را بفرستید (عکس معمولی یا فایل WebP).\n"
+        "هرچندتا عکس که خواستید می‌توانید بفرستید و در نهایت روی دکمه اتمام کلیک کنید:",
+        reply_markup=keyboard
+    )
     await callback.answer()
 
-@router.message(ProductWizard.waiting_for_seo_keyword)
-async def process_seo_keyword(message: Message, state: FSMContext):
-    await state.update_data(seo_keyword=message.text)
-    await state.set_state(ProductWizard.waiting_for_seo_slug)
-    await message.answer("🔗 حالا **پیوند دایمی (Slug / نامک)** را وارد کنید (مثلاً `blue-ceramic-bowl` یا متن دلخواه انگلیسی/فارسی):")
+@router.message(ProductWizard.waiting_for_gallery_image, F.photo | F.document)
+async def process_gallery_image_file(message: Message, state: FSMContext):
+    file_id = None
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        doc = message.document
+        if doc.mime_type and "image" in doc.mime_type or doc.file_name.lower().endswith(('.webp', '.png', '.jpg', '.jpeg')):
+            file_id = doc.file_id
+            
+    if not file_id:
+        await message.answer("❌ فرمت فایل معتبر نیست. لطفاً یک تصویر ارسال کنید.")
+        return
 
-@router.message(ProductWizard.waiting_for_seo_slug)
-async def process_seo_slug(message: Message, state: FSMContext):
-    await state.update_data(seo_slug=message.text)
-    await state.set_state(ProductWizard.waiting_for_seo_title)
-    await message.answer("📝 بسیار عالی. حالا **عنوان سئو (SEO Title)** را بفرستید:")
+    await state.update_data(gallery_file_id=file_id)
+    await state.set_state(ProductWizard.waiting_for_gallery_alt)
+    await message.answer("📝 لطفاً **متن جایگزین (Alt Text)** این عکس گالری را وارد کنید:")
 
-@router.message(ProductWizard.waiting_for_seo_title)
-async def process_seo_title(message: Message, state: FSMContext):
-    await state.update_data(seo_title=message.text)
-    await state.set_state(ProductWizard.waiting_for_seo_desc)
-    await message.answer("📄 در نهایت، **توضیحات متا (Meta Description)** را بفرستید:")
+@router.message(ProductWizard.waiting_for_gallery_image)
+async def process_gallery_image_invalid(message: Message):
+    await message.answer("❌ لطفاً یک تصویر یا فایل تصویری معتبر بفرستید.")
 
-@router.message(ProductWizard.waiting_for_seo_desc)
-async def process_seo_desc(message: Message, state: FSMContext):
+@router.message(ProductWizard.waiting_for_gallery_alt)
+async def process_gallery_alt(message: Message, state: FSMContext):
+    await state.update_data(gallery_alt=message.text)
+    await state.set_state(ProductWizard.waiting_for_gallery_title)
+    await message.answer("🏷 حالا **عنوان تصویر (Title)** این عکس گالری را وارد کنید:")
+
+@router.message(ProductWizard.waiting_for_gallery_title)
+async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
+    title_text = message.text
     data = await state.get_data()
     product_id = data['product_id']
-    keyword = data['seo_keyword']
-    slug = data['seo_slug']
-    title = data['seo_title']
-    desc = message.text
+    file_id = data['gallery_file_id']
+    alt_text = data['gallery_alt']
     
-    wait_msg = await message.answer("⏳ در حال ثبت اطلاعات سئو و پیوند دایمی در سایت...")
+    wait_msg = await message.answer("⏳ در حال آپلود و افزودن عکس به گالری سایت...")
     try:
-        meta_data = [
-            {"key": "rank_math_focus_keyword", "value": keyword},
-            {"key": "rank_math_title", "value": title},
-            {"key": "rank_math_description", "value": desc}
-        ]
+        file_info = await bot.get_file(file_id)
+        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
         
-        # ارسال هم Slug و هم فیلدهای Rank Math
-        update_payload = {
-            "slug": slug,
-            "meta_data": meta_data
-        }
-        
-        await wc_service.update_product(product_id, update_payload)
+        # دریافت اطلاعات فعلی محصول برای حفظ تصاویر قبلی (اصلی و گالری‌های قبلی)
         product = await wc_service.get_product(product_id)
+        existing_images = product.get('images', [])
+        
+        # اضافه کردن عکس جدید به لیست تصاویر موجود
+        new_gallery_image = {
+            "src": file_url,
+            "name": title_text,
+            "alt": alt_text
+        }
+        existing_images.append(new_gallery_image)
+        
+        await wc_service.update_product(product_id, {"images": existing_images})
+        
+        # بازگرداندن وضعیت به انتظار برای عکس بعدی گالری
+        await state.set_state(ProductWizard.waiting_for_gallery_image)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 اتمام و بازگشت به داشبورد", callback_data=f"finish_gallery_{product_id}")]
+        ])
         
         await wait_msg.edit_text(
-            f"✅ **اطلاعات سئو و پیوند دایمی با موفقیت ثبت شد!**\n\n👇 داشبورد محصول:",
+            f"✅ **این عکس با موفقیت به گالری اضافه شد!**\n\n"
+            f"اگر عکس دیگری برای گالری دارید بفرستید، در غیر این صورت روی دکمه زیر کلیک کنید:",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در افزودن به گالری:\n{str(e)[:500]}")
+        await state.set_state(ProductWizard.waiting_for_gallery_image)
+
+@router.callback_query(F.data.startswith("finish_gallery_"))
+async def finish_gallery_selection(callback: CallbackQuery, state: FSMContext):
+    product_id = int(callback.data.split("_")[2])
+    await state.clear()
+    wait_msg = await callback.message.edit_text("⏳ در حال بارگذاری داشبورد...")
+    try:
+        product = await wc_service.get_product(product_id)
+        await wait_msg.edit_text(
+            f"✅ **گالری تصاویر به‌روزرسانی شد.**\n\n👇 داشبورد محصول:",
             reply_markup=get_dashboard_keyboard(product_id, product['name'])
         )
-        await state.clear()
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
-        await state.clear()
+    except:
+        pass
 
 # ==========================================
 # دکمه: تصویر اصلی 🖼 (با پشتیبانی WebP و Alt/Title)
@@ -185,7 +228,7 @@ async def process_image_file(message: Message, state: FSMContext, bot: Bot):
 
     await state.update_data(file_id=file_id)
     await state.set_state(ProductWizard.waiting_for_image_alt)
-    await message.answer("📝 لطفاً **متن جایگزین (Alt Text)** تصویر را وارد کنید:")
+    await message.answer("📝 لطفاً **متن جایگزین (Alt Text)** تصویر اصلی را وارد کنید:")
 
 @router.message(ProductWizard.waiting_for_image)
 async def process_image_invalid(message: Message):
@@ -195,7 +238,7 @@ async def process_image_invalid(message: Message):
 async def process_image_alt(message: Message, state: FSMContext):
     await state.update_data(alt_text=message.text)
     await state.set_state(ProductWizard.waiting_for_image_title)
-    await message.answer("🏷 حالا **عنوان تصویر (Title)** را وارد کنید:")
+    await message.answer("🏷 حالا **عنوان تصویر (Title)** تصویر اصلی را وارد کنید:")
 
 @router.message(ProductWizard.waiting_for_image_title)
 async def process_image_title(message: Message, state: FSMContext, bot: Bot):
@@ -210,26 +253,97 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
         file_info = await bot.get_file(file_id)
         file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
         
-        update_data = {
-            "images": [
-                {
-                    "src": file_url,
-                    "name": title_text,
-                    "alt": alt_text
-                }
-            ]
+        # دریافت تصاویر قبلی برای حفظ گالری‌های موجود در صورت تنظیم عکس اصلی جدید
+        product = await wc_service.get_product(product_id)
+        existing_images = product.get('images', [])
+        
+        main_image = {
+            "src": file_url,
+            "name": title_text,
+            "alt": alt_text
         }
         
+        # اگر عکسی وجود داشت، تصویر اول را جایگزین می‌کنیم و مابقی (گالری) را حفظ می‌کنیم
+        if existing_images:
+            existing_images[0] = main_image
+        else:
+            existing_images = [main_image]
+            
+        update_data = {"images": existing_images}
+        
         await wc_service.update_product(product_id, update_data)
-        product = await wc_service.get_product(product_id)
+        updated_product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
-            f"✅ **تصویر با مشخصات کامل ثبت شد!**\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name'])
+            f"✅ **تصویر اصلی با مشخصات کامل ثبت شد!**\n\n👇 داشبورد محصول:",
+            reply_markup=get_dashboard_keyboard(product_id, updated_product['name'])
         )
         await state.clear()
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت تصویر:\n{str(e)[:500]}")
+        await state.clear()
+
+# ==========================================
+# دکمه: تنظیمات سئو 🔍 (Rank Math پیشرفته + Slug)
+# ==========================================
+@router.callback_query(F.data.startswith("edit_seo_"))
+async def start_edit_seo(callback: CallbackQuery, state: FSMContext):
+    product_id = int(callback.data.split("_")[2])
+    await state.update_data(product_id=product_id)
+    await state.set_state(ProductWizard.waiting_for_seo_keyword)
+    await callback.message.answer("🔍 **تنظیمات سئو (Rank Math)**\n\nابتدا **کلمه کلیدی اصلی** (Focus Keyword) را وارد کنید:")
+    await callback.answer()
+
+@router.message(ProductWizard.waiting_for_seo_keyword)
+async def process_seo_keyword(message: Message, state: FSMContext):
+    await state.update_data(seo_keyword=message.text)
+    await state.set_state(ProductWizard.waiting_for_seo_slug)
+    await message.answer("🔗 حالا **پیوند دایمی (Slug / نامک)** را وارد کنید (مثلاً `blue-ceramic-bowl`):")
+
+@router.message(ProductWizard.waiting_for_seo_slug)
+async def process_seo_slug(message: Message, state: FSMContext):
+    await state.update_data(seo_slug=message.text)
+    await state.set_state(ProductWizard.waiting_for_seo_title)
+    await message.answer("📝 بسیار عالی. حالا **عنوان سئو (SEO Title)** را بفرستید:")
+
+@router.message(ProductWizard.waiting_for_seo_title)
+async def process_seo_title(message: Message, state: FSMContext):
+    await state.update_data(seo_title=message.text)
+    await state.set_state(ProductWizard.waiting_for_seo_desc)
+    await message.answer("📄 در نهایت، **توضیحات متا (Meta Description)** را بفرستید:")
+
+@router.message(ProductWizard.waiting_for_seo_desc)
+async def process_seo_desc(message: Message, state: FSMContext):
+    data = await state.get_data()
+    product_id = data['product_id']
+    keyword = data['seo_keyword']
+    slug = data['seo_slug']
+    title = data['seo_title']
+    desc = message.text
+    
+    wait_msg = await message.answer("⏳ در حال ثبت اطلاعات سئو و پیوند دایمی در سایت...")
+    try:
+        meta_data = [
+            {"key": "rank_math_focus_keyword", "value": keyword},
+            {"key": "rank_math_title", "value": title},
+            {"key": "rank_math_description", "value": desc}
+        ]
+        
+        update_payload = {
+            "slug": slug,
+            "meta_data": meta_data
+        }
+        
+        await wc_service.update_product(product_id, update_payload)
+        product = await wc_service.get_product(product_id)
+        
+        await wait_msg.edit_text(
+            f"✅ **اطلاعات سئو و پیوند دایمی با موفقیت ثبت شد!**\n\n👇 داشبورد محصول:",
+            reply_markup=get_dashboard_keyboard(product_id, product['name'])
+        )
+        await state.clear()
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
         await state.clear()
 
 # ==========================================
