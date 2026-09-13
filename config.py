@@ -1,18 +1,20 @@
 import os
 from dotenv import load_dotenv
 
-# این خط برای زمانی که روی سیستم لوکال هستید کاربرد دارد (از فایل .env می‌خواند)
-# روی سرور ابری، متغیرها مستقیماً از تنظیمات سرور خوانده می‌شوند.
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# بررسی وجود متغیرهای حیاتی
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is missing in environment variables!")
-if not ADMIN_ID:
-    raise ValueError("❌ ADMIN_ID is missing in environment variables!")
+# کلیدهای ووکامرس
+WC_URL = os.getenv("WC_URL")
+WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
+WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 
-# تبدیل آیدی ادمین به عدد صحیح
+# بررسی وجود متغیرها
+if not all([BOT_TOKEN, ADMIN_ID, WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET]):
+    raise ValueError("❌ Missing environment variables! Check Render settings.")
+
 ADMIN_ID = int(ADMIN_ID)
+# حذف اسلش اضافی از انتهای آدرس سایت در صورت وجود
+WC_URL = WC_URL.rstrip("/")
