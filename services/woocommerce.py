@@ -22,3 +22,15 @@ class WooCommerceService:
                     raise Exception(f"WC API Error {response.status}: {text}")
                 
                 return await response.json()
+
+    # --- این بخش جدید است که اضافه شد ---
+    async def create_simple_product(self, data: dict):
+        url = f"{self.base_url}/wp-json/wc/v3/products"
+        async with aiohttp.ClientSession(auth=self.auth) as session:
+            async with session.post(url, json=data) as response:
+                # کدهای 200 و 201 برای موفقیت‌آمیز بودن ثبت هستند
+                if response.status not in [200, 201]:
+                    text = await response.text()
+                    raise Exception(f"WC API Error {response.status}: {text}")
+                
+                return await response.json()
