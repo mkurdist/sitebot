@@ -15,7 +15,7 @@ async def health_check(request):
     return web.Response(text="🏺 CitySofal Bot is Live and Running!")
 
 # ==========================================
-# دریافت و بررسی وب‌هوک سفارش از ووکامرس (نسخه فوق‌پیشرفته و ایزوله)
+# دریافت و بررسی وب‌هوک سفارش از ووکامرس (نسخه نهایی و بهینه‌سازی شده)
 # ==========================================
 async def handle_order_webhook(request):
     bot_instance = request.app['bot']
@@ -36,25 +36,15 @@ async def handle_order_webhook(request):
             )
             return web.json_response({"status": "received_non_json"}, status=200)
 
-        # ۲. ارسال ساختار خام (Raw JSON) برای تحلیل و بررسی دقیق شما در تلگرام
-        raw_json_str = json.dumps(data, indent=2, ensure_ascii=False)
-        debug_msg = f"🔍 **[DEBUG] ساختار خام دریافتی از ووکامرس:**\n<pre>{raw_json_str[:3800]}</pre>"
-        await bot_instance.send_message(
-            chat_id=ADMIN_ID,
-            text=debug_msg,
-            parse_mode="HTML"
-        )
-
-        # ۳. استخراج عمیق و پیشرفته اطلاعات سفارش
+        # ۲. استخراج عمیق و پیشرفته اطلاعات سفارش
         order_id = data.get("id", "نامشخص")
         status = data.get("status", "نامشخص")
-        currency = data.get("currency", "تومان")
         total = data.get("total", "0")
         shipping_total = data.get("shipping_total", "0")
         payment_method_title = data.get("payment_method_title", "نامشخص")
         customer_note = data.get("customer_note", "")
 
-        # اطلاعات مشتری (Billing & Shipping)
+        # اطلاعات مشتری (Billing)
         billing = data.get("billing", {})
         first_name = billing.get("first_name", "ثبت‌نشده")
         last_name = billing.get("last_name", "")
@@ -64,19 +54,24 @@ async def handle_order_webhook(request):
         address = billing.get("address_1", "")
         state = billing.get("state", "")
 
+        # استخراج روش ارسال (Shipping Method)
+        shipping_lines = data.get("shipping_lines", [])
+        shipping_method = "پیش‌فرض"
+        if shipping_lines:
+            shipping_method = shipping_lines[0].get("method_title", "پست/تیپاکس")
+
         # استخراج اقلام سفارش (Line Items)
         line_items = data.get("line_items", [])
         products_list = ""
         for index, item in enumerate(line_items, 1):
             p_name = item.get("name", "محصول")
             p_qty = item.get("quantity", 1)
-            p_subtotal = item.get("subtotal", "0")
             p_total = item.get("total", "0")
             
-            products_list += f"{index}. **{p_name}**\n   🔹 تعداد: `{p_qty}` | قیمت کل: `{p_total} {currency}`\n"
+            products_list += f"{index}. **{p_name}**\n   🔹 تعداد: `{p_qty}` | مبلغ کل: `{p_total} تومان`\n"
 
         if not products_list:
-            products_list = "▫️ (اقلام سفارشی در این پکیج یافت نشد یا تست است)\n"
+            products_list = "▫️ (اقلام سفارشی ثبت نشده است)\n"
 
         # ترجمه وضعیت‌های رایج ووکامرس به فارسی برای خوانایی بهتر
         status_translations = {
@@ -85,25 +80,26 @@ async def handle_order_webhook(request):
             "on-hold": "⏸ در انتظار بررسی",
             "completed": "🎉 تکمیل شده",
             "cancelled": "❌ لغو شده",
-            "refunded": " برگشت خورده",
+            "refunded": "برگشت خورده",
             "failed": "⚠️ ناموفق"
         }
         persian_status = status_translations.get(status, status)
 
-        # ۴. ساخت قالب نهایی فاکتور زیبا و ساختاریافته
+        # ۳. ساخت قالب نهایی فاکتور زیبا و ساختاریافته
         order_text = (
-            f"🔔 **ثبت سفارش جدید در شهر سفال!**\n\n"
+            f"🔔 **ثبت سفارش جدید در شهر سفال! 🎉**\n\n"
             f"🆔 **شماره سفارش:** `#{order_id}`\n"
             f"📌 **وضعیت:** {persian_status}\n"
-            f"💳 **روش پرداخت:** {payment_method_title}\n\n"
+            f"💳 **روش پرداخت:** {payment_method_title}\n"
+            f"🚚 **روش ارسال:** {shipping_method}\n\n"
             f"👤 **مشخصات مشتری:**\n"
             f"▫️ نام: {first_name} {last_name}\n"
             f"▫️ تلفن: `{phone}`\n"
             f"▫️ ایمیل: `{email if email else 'ندارد'}`\n"
             f"▫️ آدرس: استان {state}، شهر {city} - {address}\n\n"
             f"🛒 **محصولات خریداری شده:**\n{products_list}\n"
-            f"📦 **هزینه ارسال:** `{shipping_total} {currency}`\n"
-            f"💰 **مبلغ کل پرداخت‌شده:** `{total} {currency}`"
+            f"📦 **هزینه ارسال:** `{shipping_total} تومان`\n"
+            f"💰 **مبلغ کل پرداخت‌شده:** `{total} تومان`"
         )
 
         if customer_note:
