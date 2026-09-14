@@ -6,3 +6,5 @@ class ArticleWizard(StatesGroup):
     waiting_for_image_alt = State()
     waiting_for_image_title = State()
     waiting_for_categories = State()
+    waiting_for_primary_category = State()
+    waiting_for_publish_action = State()
