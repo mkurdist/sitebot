@@ -1,5 +1,6 @@
 import re
-from aiogram import Router, F
+import io
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from states.article_states import ArticleWizard
@@ -16,20 +17,19 @@ async def start_article_wizard(message: Message, state: FSMContext):
     await state.update_data(article_buffer="")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ پردازش ۵ کادر و ثبت اولیه", callback_data="process_article_buffer")]
+        [InlineKeyboardButton(text="✅ پردازش ۵ کادر و ادامه", callback_data="process_article_buffer")]
     ])
     
     instruction = (
         "📝 <b>سیستم انتشار هوشمند مقاله (وبلاگ)</b>\n\n"
-        "متن مقاله تولید شده توسط AI را اینجا Paste کنید.\n"
-        "<i>(نکته: اگر مقاله طولانی است، آن را در چند پیام بفرستید)</i>\n\n"
-        "<b>فرمت استاندارد جدید برای هوش مصنوعی:</b>\n"
+        "متن مقاله تولید شده توسط AI را اینجا Paste کنید.\n\n"
+        "<b>فرمت استاندارد:</b>\n"
         "۱. کادر عنوان مقاله:\n"
         "۲. کادر پیوند یکتا (Slug):\n"
         "۳. کادر کلمه کلیدی:\n"
         "۴. کادر توضیحات متا:\n"
         "۵. کادر محتوای مقاله:\n\n"
-        "پس از ارسال تمام بخش‌ها، روی دکمه زیر کلیک کنید:"
+        "پس از ارسال تمام بخش‌ها، روی دکمه پردازش کلیک کنید:"
     )
     await message.answer(instruction, reply_markup=keyboard, parse_mode="HTML")
 
@@ -40,7 +40,7 @@ async def accumulate_article_text(message: Message, state: FSMContext):
     new_buffer = current_buffer + "\n\n" + message.text
     await state.update_data(article_buffer=new_buffer)
     
-    await message.answer("📥 <i>متن دریافت شد. اگر ادامه دارد بفرستید، در غیر این صورت دکمه «پردازش ۵ کادر» در پیام بالا را بزنید.</i>", parse_mode="HTML")
+    await message.answer("📥 <i>متن دریافت شد. روی دکمه «پردازش ۵ کادر و ادامه» در پیام بالا کلیک کنید.</i>", parse_mode="HTML")
 
 @router.callback_query(F.data == "process_article_buffer")
 async def process_article(callback: CallbackQuery, state: FSMContext):
@@ -51,10 +51,9 @@ async def process_article(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ هنوز هیچ متنی نفرستاده‌اید!", show_alert=True)
         return
 
-    wait_msg = await callback.message.answer("⏳ در حال تحلیل متن، اعمال استایل‌ها و ساخت پیش‌نویس در سایت...")
+    wait_msg = await callback.message.answer("⏳ در حال تحلیل متن و ثبت پیش‌نویس اولیه در سایت...")
     
     try:
-        # استخراج ۵ کادر با Regex
         title_match = re.search(r'۱\.\s*کادر عنوان مقاله:?\s*\n(.*?)(?=\n۲\.)', text, re.DOTALL)
         slug_match = re.search(r'۲\.\s*کادر پیوند یکتا.*?:?\s*\n(.*?)(?=\n۳\.)', text, re.DOTALL)
         kw_match = re.search(r'۳\.\s*کادر کلمه کلیدی:?\s*\n(.*?)(?=\n۴\.)', text, re.DOTALL)
@@ -67,64 +66,131 @@ async def process_article(callback: CallbackQuery, state: FSMContext):
         meta_desc = desc_match.group(1).strip() if desc_match else ""
         raw_content = content_match.group(1).strip() if content_match else text
         
-        # ==========================================
-        # اعمال استایل‌های خودکار (جادوی سئو و ظاهر)
-        # ==========================================
-        # ۱. تبدیل خطوط جدید به تگ <br> در صورت نیاز (اگر هوش مصنوعی <p> نذاشته بود)
+        # استایل‌های HTML (Nofollow و Justify)
         formatted_content = raw_content.replace('\n', '<br>')
-        
-        # ۲. تزریق Nofollow و Target Blank به تمام لینک‌ها
-        # ابتدا تگ‌های اضافی rel و target قبلی را پاک می‌کنیم تا تداخل پیش نیاید
         formatted_content = re.sub(r'\srel="[^"]*"', '', formatted_content)
         formatted_content = re.sub(r'\starget="[^"]*"', '', formatted_content)
-        # سپس استاندارد خودمان را به همه لینک‌ها اضافه می‌کنیم
         formatted_content = formatted_content.replace('<a ', '<a rel="nofollow" target="_blank" ')
         
-        # ۳. قرار دادن کل محتوا در یک دایو (Div) برای تراز Justify و راست‌چین
         final_html_content = (
             f'<div style="text-align: justify; text-justify: inter-word; direction: rtl;">\n'
             f'{formatted_content}\n'
             f'</div>'
         )
 
-        # ساخت متا دیتای RankMath
         meta_data = {}
         if focus_kw: meta_data["rank_math_focus_keyword"] = focus_kw
         if meta_desc: meta_data["rank_math_description"] = meta_desc
 
-        # ساخت Payload نهایی برای API وردپرس
         payload = {
             "title": post_title,
             "content": final_html_content,
             "status": "draft",
         }
-        
-        # اگر نامک انگلیسی داده شده بود، اضافه می‌کنیم
-        if post_slug:
-            payload["slug"] = post_slug
-            
-        # اگر دیتای رنک‌مث وجود داشت، اضافه می‌کنیم
-        if meta_data:
-            payload["meta"] = meta_data
+        if post_slug: payload["slug"] = post_slug
+        if meta_data: payload["meta"] = meta_data
         
         result = await wp_service.create_post(payload)
+        post_id = result['id']
         post_link = result.get('link', '')
         
-        success_msg = (
-            f"✅ <b>جادوی سئو انجام شد! پیش‌نویس مقاله ثبت گردید.</b>\n\n"
-            f"🏷 <b>عنوان:</b> {post_title}\n"
-            f"🔗 <b>نامک:</b> {post_slug or 'خودکار'}\n"
-            f"🔑 <b>کلمه کلیدی:</b> {focus_kw or 'ندارد'}\n"
-            f"📌 <b>وضعیت:</b> پیش‌نویس (Draft)\n\n"
-            f"✨ <i>تمام متون Justify شدند و لینک‌ها به صورت Nofollow درآمدند.</i>\n\n"
-            f"🌐 <a href='{post_link}'>لینک پیش‌نمایش در سایت</a>"
+        # ذخیره اطلاعات برای مرحله آپلود عکس
+        await state.update_data(
+            post_id=post_id, 
+            post_title=post_title, 
+            post_link=post_link,
+            focus_kw=focus_kw
         )
+        await state.set_state(ArticleWizard.waiting_for_featured_image)
         
-        await wait_msg.edit_text(success_msg, parse_mode="HTML", disable_web_page_preview=True)
-        await state.clear()
+        await wait_msg.edit_text(
+            f"✅ <b>متن، سئو و استایل‌ها ثبت شد!</b>\n\n"
+            f"🖼 حالا لطفاً <b>تصویر شاخص (عکس اصلی)</b> مقاله را ارسال کنید (فایل یا عکس):", 
+            parse_mode="HTML"
+        )
         await callback.answer()
         
     except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در پردازش و ایجاد مقاله:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+        await wait_msg.edit_text(f"❌ خطا در پردازش متن:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
         await state.clear()
         await callback.answer()
+
+# ==========================================
+# فاز آپلود هوشمند عکس، تغییر نام و ثبت متا
+# ==========================================
+@router.message(ArticleWizard.waiting_for_featured_image, F.photo | F.document)
+async def process_featured_image(message: Message, state: FSMContext):
+    file_id = None
+    ext = "jpg" # پیش‌فرض
+    
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        file_id = message.document.file_id
+        if message.document.file_name:
+            ext = message.document.file_name.split('.')[-1].lower()
+            
+    if not file_id:
+        await message.answer("❌ فایل نامعتبر! لطفاً یک عکس ارسال کنید.")
+        return
+
+    await state.update_data(image_file_id=file_id, image_ext=ext)
+    await state.set_state(ArticleWizard.waiting_for_image_alt)
+    await message.answer("📝 بسیار عالی. لطفاً <b>متن جایگزین (Alt Text)</b> تصویر را برای سئو وارد کنید:", parse_mode="HTML")
+
+@router.message(ArticleWizard.waiting_for_image_alt)
+async def process_image_alt(message: Message, state: FSMContext):
+    await state.update_data(image_alt=message.text)
+    await state.set_state(ArticleWizard.waiting_for_image_title)
+    await message.answer("🏷 حالا <b>عنوان (Title)</b> این عکس را وارد کنید:", parse_mode="HTML")
+
+@router.message(ArticleWizard.waiting_for_image_title)
+async def process_image_title(message: Message, state: FSMContext, bot: Bot):
+    image_title = message.text
+    data = await state.get_data()
+    
+    post_id = data['post_id']
+    file_id = data['image_file_id']
+    ext = data['image_ext']
+    alt_text = data['image_alt']
+    post_title = data['post_title']
+    post_link = data['post_link']
+    kw = data.get('focus_kw', '').strip()
+    
+    wait_msg = await message.answer("⏳ در حال تبدیل فرمت، ساخت نام سئوشده و آپلود در رسانه سایت...")
+    
+    try:
+        # ۱. ساخت نام فایل بر اساس کلمه کلیدی
+        if not kw:
+            kw = f"citysofal-article-{post_id}"
+            
+        # تبدیل فاصله‌ها و کاراکترهای نامعتبر به خط تیره برای نام فایل
+        kw_slug = re.sub(r'[\s_]+', '-', kw)
+        
+        file_info = await bot.get_file(file_id)
+        # خروجی نهایی نام عکس: مثلا ظروف-سفالی-Ag4b.webp
+        seo_filename = f"{kw_slug}-{file_info.file_unique_id[-4:]}.{ext}" 
+        
+        # ۲. دانلود در حافظه رم
+        file_bytes = io.BytesIO()
+        await bot.download_file(file_info.file_path, file_bytes)
+        
+        # ۳. آپلود در رسانه وردپرس
+        media_id = await wp_service.upload_media(file_bytes.getvalue(), seo_filename, alt_text, image_title)
+        
+        # ۴. اتصال به عنوان تصویر شاخص مقاله
+        await wp_service.update_post(post_id, {"featured_media": media_id})
+        
+        success_msg = (
+            f"🎉 <b>جادوی سئوی تصویر انجام شد!</b>\n\n"
+            f"📂 <b>نام فایل ساخته شده:</b> <code>{seo_filename}</code>\n"
+            f"🏷 <b>عنوان مقاله:</b> {post_title}\n"
+            f"🌐 <a href='{post_link}'>لینک پیش‌نمایش در سایت</a>\n\n"
+            f"<i>نکته: مقاله در وضعیت پیش‌نویس است.</i>"
+        )
+        await wait_msg.edit_text(success_msg, parse_mode="HTML", disable_web_page_preview=True)
+        await state.clear()
+        
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در آپلود تصویر شاخص:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+        await state.clear()
