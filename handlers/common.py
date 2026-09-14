@@ -1,13 +1,12 @@
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart
-from services.woocommerce import WooCommerceService
+
+# استفاده از نشست یکتا و سراسری
+from services.woocommerce import wc_service_instance as wc_service
 
 # ساخت یک روتر برای مدیریت پیام‌های عمومی
 router = Router()
-
-# نمونه‌سازی از سرویس ووکامرس
-wc_service = WooCommerceService()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
