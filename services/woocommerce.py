@@ -15,6 +15,13 @@ class WooCommerceService:
             self._session = aiohttp.ClientSession(auth=self.auth)
         return self._session
 
+    # ==================================
+    # متد جدید برای بستن ایمن نشست (Graceful Shutdown)
+    # ==================================
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+
     async def get_latest_products(self, per_page=3):
         url = f"{self.base_url}/wp-json/wc/v3/products"
         params = {"per_page": per_page, "orderby": "date", "order": "desc"}
@@ -102,3 +109,9 @@ class WooCommerceService:
                 text = await response.text()
                 raise Exception(f"WC API Error {response.status}: {text}")
             return await response.json()
+
+# ==================================
+# ایجاد یک نمونه سراسری (Singleton)
+# تمام فایل‌های دیگر فقط باید این متغیر را ایمپورت کنند
+# ==================================
+wc_service_instance = WooCommerceService()
