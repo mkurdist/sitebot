@@ -1,3 +1,4 @@
+import re  # ایمپورت ماژول پردازش متن برای هوش مصنوعی
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -32,7 +33,7 @@ def get_dashboard_keyboard(product_id: int, product_name: str) -> InlineKeyboard
     ])
 
 # ==========================================
-# شروع عملیات ثبت محصول (محافظت‌شده با سیستم نگهبان)
+# شروع عملیات ثبت محصول دستی
 # ==========================================
 @router.message(F.text == "➕ محصول جدید")
 async def start_product_wizard(message: Message, state: FSMContext):
@@ -40,7 +41,6 @@ async def start_product_wizard(message: Message, state: FSMContext):
     active_product_id = data.get("product_id")
     active_product_name = data.get("product_name")
 
-    # اگر کاربر محصول نیمه‌کاره‌ای در حافظه داشت، به او هشدار می‌دهیم
     if active_product_id:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -57,7 +57,6 @@ async def start_product_wizard(message: Message, state: FSMContext):
         )
         return
 
-    # در غیر این صورت مستقیماً مراحل ساخت جدید شروع می‌شود
     await state.clear()
     await state.set_state(ProductWizard.waiting_for_name)
     await message.answer("🛒 **ساخت محصول جدید**\n\nلطفاً فقط **نام محصول** را وارد کنید (مثلاً کاسه سفالی میناکاری):")
@@ -100,7 +99,6 @@ async def process_initial_name(message: Message, state: FSMContext):
         result = await wc_service.create_simple_product(product_data)
         product_id = result['id']
         
-        # ذخیره آیدی و نام در State برای محافظت در برابر گم شدن
         await state.update_data(product_id=product_id, product_name=product_name)
         
         text = (
@@ -110,10 +108,103 @@ async def process_initial_name(message: Message, state: FSMContext):
             f"👇 حالا از پنل زیر، هر بخشی را که می‌خواهید تکمیل کنید:"
         )
         await wait_msg.edit_text(text, reply_markup=get_dashboard_keyboard(product_id, product_name))
-        
-        # نکته: state رو کامل پاک نمی‌کنیم تا product_id و product_name برای دکمه‌های شیشه‌ای ذخیره بماند
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ساخت پیش‌نویس:\n{str(e)[:500]}")
+        await state.clear()
+
+# ==========================================
+# سیستم هوشمند افزودن خودکار محصول (Auto Add)
+# ==========================================
+@router.message(F.text == "⚡ افزودن خودکار (AI)")
+async def start_auto_add(message: Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(ProductWizard.waiting_for_ai_text)
+    
+    instruction = (
+        "🤖 **سیستم افزودن خودکار محصول فعال شد**\n\n"
+        "لطفاً کل متن تولید شده توسط هوش مصنوعی (شامل کادرهای ۱ تا ۹) را به صورت یکجا اینجا Paste کنید تا محصول به صورت خودکار ساخته شود:"
+    )
+    await message.answer(instruction)
+
+@router.message(ProductWizard.waiting_for_ai_text)
+async def process_ai_auto_add(message: Message, state: FSMContext):
+    text = message.text
+    wait_msg = await message.answer("⏳ در حال تحلیل متن هوش مصنوعی و ساخت محصول در ووکامرس...")
+    
+    try:
+        # استخراج داده‌ها با استفاده از Regex
+        title = re.search(r'۱\.\s*کادر عنوان محصول.*?\n(.*?)(?=\n۲\.)', text, re.DOTALL)
+        focus_kw = re.search(r'۲\.\s*کادر کلمه کلیدی اصلی.*?\n(.*?)(?=\n۳\.)', text, re.DOTALL)
+        short_desc_ai = re.search(r'۳\.\s*کادر توضیحات کوتاه.*?\n(.*?)(?=\n۴\.)', text, re.DOTALL)
+        conv_text = re.search(r'۴\.\s*کادر متن محاوره‌ای.*?\n(.*?)(?=\n۵\.)', text, re.DOTALL)
+        full_desc = re.search(r'۵\.\s*کادر توضیحات کامل.*?\n(.*?)(?=\n۶\.)', text, re.DOTALL)
+        specs = re.search(r'۶\.\s*کادر ویژگی‌ها.*?\n(.*?)(?=\n۷\.)', text, re.DOTALL)
+        
+        seo_title = re.search(r'عنوان سئو.*?\):\s*(.*?)\n', text)
+        seo_desc = re.search(r'توضیحات متادیسکریپشن.*?\):\s*(.*?)\n', text)
+        slug = re.search(r'نامک انگلیسی.*?\):\s*(.*?)\n', text)
+        tags_match = re.search(r'۸\.\s*کادر برچسب‌های محصول.*?\n(.*?)(?=\n۹\.)', text, re.DOTALL)
+
+        product_title = title.group(1).strip() if title else "محصول جدید AI"
+        
+        # --- قرار دادن کادر ۶ (جدول ویژگی‌ها) در فیلد توضیحات کوتاه ووکامرس ---
+        short_description = ""
+        if specs: 
+            short_description = f"<b>مشخصات و ویژگی‌ها:</b><br><br>{specs.group(1).strip().replace('\n', '<br>')}"
+
+        # --- ترکیب کادر ۳، ۴ و ۵ برای فیلد توضیحات اصلی (پایین صفحه سایت) ---
+        long_description = ""
+        if short_desc_ai: long_description += f"{short_desc_ai.group(1).strip()}<br><br>"
+        if conv_text: long_description += f"<i>{conv_text.group(1).strip()}</i><br><br>"
+        if full_desc: long_description += f"{full_desc.group(1).strip().replace('\n', '<br>')}"
+
+        # آماده‌سازی تگ‌ها
+        tags_list = []
+        if tags_match:
+            raw_tags = tags_match.group(1).split('،') if '،' in tags_match.group(1) else tags_match.group(1).split(',')
+            tags_list = [{"name": t.strip()} for t in raw_tags if t.strip()]
+
+        # آماده‌سازی دیتای سئو (RankMath)
+        meta_data = []
+        if focus_kw: meta_data.append({"key": "rank_math_focus_keyword", "value": focus_kw.group(1).strip()})
+        if seo_title: meta_data.append({"key": "rank_math_title", "value": seo_title.group(1).strip()})
+        if seo_desc: meta_data.append({"key": "rank_math_description", "value": seo_desc.group(1).strip()})
+
+        # ساخت Payload برای ارسال یکجای اطلاعات به ووکامرس
+        product_payload = {
+            "name": product_title,
+            "type": "simple",
+            "status": "draft",
+            "short_description": short_description,
+            "description": long_description,
+            "tags": tags_list,
+            "meta_data": meta_data
+        }
+        
+        if slug:
+            product_payload["slug"] = slug.group(1).strip()
+
+        # ارسال به سایت (با استفاده از سرویس ووکامرس که قبلا ساختیم)
+        result = await wc_service.create_simple_product(product_payload)
+        product_id = result['id']
+        
+        # ذخیره در حافظه برای ادامه کار با داشبورد شیشه‌ای
+        await state.update_data(product_id=product_id, product_name=product_title)
+        
+        success_msg = (
+            f"✅ **جادوی AI انجام شد! محصول با موفقیت ایجاد گردید.**\n\n"
+            f"🏷 **نام:** {product_title}\n"
+            f"🆔 **آیدی:** {product_id}\n\n"
+            f"🧩 تمام متون، تگ‌ها و سئو جای‌گذاری شدند (جدول مشخصات به توضیحات کوتاه منتقل شد).\n"
+            f"👇 حالا فقط کافیست از پنل زیر **تصاویر**، **قیمت** و **دسته‌بندی** را مشخص کرده و انتشار را بزنید:"
+        )
+        
+        await wait_msg.edit_text(success_msg, reply_markup=get_dashboard_keyboard(product_id, product_title))
+
+    except Exception as e:
+        await wait_msg.edit_text(
+            f"❌ خطایی در خواندن متن یا ارتباط با سایت رخ داد.\n\nجزئیات خطا:\n{str(e)[:500]}"
+        )
         await state.clear()
 
 # ==========================================
@@ -146,7 +237,7 @@ async def process_delete(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"❌ خطا در حذف:\n{str(e)[:500]}")
 
 # ==========================================
-# دکمه: گالری تصاویر 🗂 (نسخه اصلاح‌شده برای اتصال دقیق آیدی به گالری ووکامرس)
+# دکمه: گالری تصاویر 🗂
 # ==========================================
 @router.callback_query(F.data.startswith("edit_gallery_"))
 async def start_edit_gallery(callback: CallbackQuery, state: FSMContext):
@@ -262,7 +353,7 @@ async def finish_gallery_selection(callback: CallbackQuery, state: FSMContext):
         pass
 
 # ==========================================
-# دکمه: تصویر اصلی 🖼 (با پشتیبانی WebP و Alt/Title)
+# دکمه: تصویر اصلی 🖼
 # ==========================================
 @router.callback_query(F.data.startswith("edit_img_"))
 async def start_edit_img(callback: CallbackQuery, state: FSMContext):
@@ -343,7 +434,7 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
         await wait_msg.edit_text(f"❌ خطا در ثبت تصویر:\n{str(e)[:500]}")
 
 # ==========================================
-# دکمه: تنظیمات سئو 🔍 (Rank Math پیشرفته + Slug)
+# دکمه: تنظیمات سئو 🔍
 # ==========================================
 @router.callback_query(F.data.startswith("edit_seo_"))
 async def start_edit_seo(callback: CallbackQuery, state: FSMContext):
@@ -404,7 +495,7 @@ async def process_seo_desc(message: Message, state: FSMContext):
         await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n{str(e)[:500]}")
 
 # ==========================================
-# دکمه: دسته‌بندی 📂 (چندتایی + اصلی)
+# دکمه: دسته‌بندی 📂
 # ==========================================
 @router.callback_query(F.data.startswith("edit_cat_"))
 async def start_edit_cat(callback: CallbackQuery, state: FSMContext):
