@@ -10,12 +10,15 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 WC_URL = os.getenv("WC_URL")
 WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
-WC_WEBHOOK_SECRET = os.getenv("WC_WEBHOOK_SECRET")  # <--- کلید امنیتی وب‌هوک اضافه شد
+WC_WEBHOOK_SECRET = os.getenv("WC_WEBHOOK_SECRET")
 
-# بررسی وجود متغیرها (وب‌هوک سکرت هم به بررسی اضافه شد)
-if not all([BOT_TOKEN, ADMIN_ID, WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET, WC_WEBHOOK_SECRET]):
+# کلیدهای وردپرس (برای انتشار مقاله)
+WP_USER = os.getenv("WP_USER")
+WP_APP_PASS = os.getenv("WP_APP_PASS")
+
+# بررسی وجود متغیرها
+if not all([BOT_TOKEN, ADMIN_ID, WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET, WC_WEBHOOK_SECRET, WP_USER, WP_APP_PASS]):
     raise ValueError("❌ Missing environment variables! Check Render settings.")
 
 ADMIN_ID = int(ADMIN_ID)
-# حذف اسلش اضافی از انتهای آدرس سایت در صورت وجود
 WC_URL = WC_URL.rstrip("/")
