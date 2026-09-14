@@ -16,6 +16,10 @@ from handlers.common import router as common_router
 from handlers.products import router as products_router
 from handlers.orders import router as orders_router  
 
+# اضافه شدن سرویس‌ها برای بستن ایمن نشست‌ها
+from services.woocommerce import wc_service_instance as wc_service
+from services.wordpress import wp_service_instance as wp_service
+
 # یک صفحه ساده برای اینکه رندر متوجه شود سرور وب ما روشن است
 async def health_check(request):
     return web.Response(text="🏺 CitySofal Bot is Live and Running!")
@@ -217,6 +221,9 @@ async def main():
     finally:
         await bot.session.close()
         await runner.cleanup()
+        # بستن ایمن کانکشن‌های اختصاصی
+        await wc_service.close()
+        await wp_service.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
