@@ -4,10 +4,11 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from states.product_states import ProductWizard
-from services.woocommerce import WooCommerceService
+
+# استفاده از نشست یکتا و سراسری
+from services.woocommerce import wc_service_instance as wc_service
 
 router = Router()
-wc_service = WooCommerceService()
 
 # ==========================================
 # کیبورد داشبورد شیشه‌ای (ارتقا یافته با گالری)
