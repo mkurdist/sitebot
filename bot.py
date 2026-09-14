@@ -15,8 +15,9 @@ from utils.security import AdminOnlyMiddleware
 from handlers.common import router as common_router
 from handlers.products import router as products_router
 from handlers.orders import router as orders_router  
+from handlers.articles import router as articles_router  # <--- روتر مقالات اضافه شد
 
-# اضافه شدن سرویس‌ها برای بستن ایمن نشست‌ها
+# اضافه شدن سرویس‌ها برای بستن ایمن نشست‌ها هنگام خاموش شدن ربات
 from services.woocommerce import wc_service_instance as wc_service
 from services.wordpress import wp_service_instance as wp_service
 
@@ -198,6 +199,7 @@ async def main():
     dp.include_router(common_router)
     dp.include_router(products_router)
     dp.include_router(orders_router)
+    dp.include_router(articles_router) # <--- روتر مقالات اضافه شد
 
     # راه‌اندازی سرور وب
     app = web.Application()
@@ -221,7 +223,7 @@ async def main():
     finally:
         await bot.session.close()
         await runner.cleanup()
-        # بستن ایمن کانکشن‌های اختصاصی
+        # بستن ایمن کانکشن‌های اختصاصی سایت
         await wc_service.close()
         await wp_service.close()
 
