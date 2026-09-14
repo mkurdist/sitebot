@@ -92,6 +92,32 @@ class WordPressService:
             return media_id
 
     # ==================================
+    # متد دریافت لیست آخرین مقالات (برای ویرایش)
+    # ==================================
+    async def get_recent_posts(self, per_page=10):
+        url = f"{self.base_url}/posts"
+        # status=any و context=edit تا پیش‌نویس‌ها هم با همین Application Password دیده شوند
+        params = {"per_page": per_page, "orderby": "date", "order": "desc", "status": "any", "context": "edit"}
+        session = await self.get_session()
+        async with session.get(url, params=params) as response:
+            if response.status != 200:
+                text = await response.text()
+                raise Exception(f"WP API Error {response.status}: {text}")
+            return await response.json()
+
+    # ==================================
+    # متد دریافت یک مقاله (برای بارگذاری در ویرایش)
+    # ==================================
+    async def get_post(self, post_id: int):
+        url = f"{self.base_url}/posts/{post_id}"
+        session = await self.get_session()
+        async with session.get(url, params={"context": "edit"}) as response:
+            if response.status != 200:
+                text = await response.text()
+                raise Exception(f"WP API Error {response.status}: {text}")
+            return await response.json()
+
+    # ==================================
     # متد دریافت دسته‌بندی‌های وبلاگ (اختیاری برای آینده)
     # ==================================
     async def get_categories(self):
