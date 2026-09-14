@@ -1,4 +1,5 @@
 import re  
+import io
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -7,6 +8,8 @@ from states.product_states import ProductWizard
 
 # استفاده از نشست یکتا و سراسری
 from services.woocommerce import wc_service_instance as wc_service
+# برای آپلود مستقیم فایل تصویر به کتابخانه رسانه وردپرس (به‌جای پاس دادن لینک موقت تلگرام)
+from services.wordpress import wp_service_instance as wp_service
 
 router = Router()
 
@@ -324,15 +327,23 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
     
     wait_msg = await message.answer("⏳ در حال آپلود و اتصال به گالری محصول...")
     try:
+        product_name = data.get('product_name', f'product-{product_id}')
+        seo_slug = re.sub(r'[\s_]+', '-', product_name.strip()) or f'product-{product_id}'
+
         file_info = await bot.get_file(file_id)
-        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+        ext = file_info.file_path.split('.')[-1].lower() if '.' in file_info.file_path else 'jpg'
+        file_bytes = io.BytesIO()
+        await bot.download_file(file_info.file_path, file_bytes)
+
+        seo_filename = f"{seo_slug}-gallery-{file_info.file_unique_id[-4:]}.{ext}"
+        media_id = await wp_service.upload_media(file_bytes.getvalue(), seo_filename, alt_text, title_text)
         
         # واکشی تصاویر فعلی و اضافه کردن عکس جدید
         product = await wc_service.get_product(product_id)
         current_images = product.get('images', [])
         
         new_img_payload = {
-            "src": file_url,
+            "id": media_id,
             "name": title_text,
             "alt": alt_text
         }
@@ -359,12 +370,16 @@ async def process_gallery_title(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("finish_gallery_"))
 async def finish_gallery_selection(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[2])
+    data = await state.get_data()
+    product_name = data.get('product_name')
     wait_msg = await callback.message.edit_text("⏳ در حال بارگذاری داشبورد...")
     try:
-        product = await wc_service.get_product(product_id)
+        if not product_name:
+            product = await wc_service.get_product(product_id)
+            product_name = product['name']
         await wait_msg.edit_text(
             f"✅ <b>گالری تصاویر به‌روزرسانی شد.</b>\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, product_name), parse_mode="HTML"
         )
     except:
         pass
@@ -421,14 +436,23 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
     
     wait_msg = await message.answer("⏳ در حال آپلود تصویر در سایت...")
     try:
+        product_name = data.get('product_name', f'product-{product_id}')
+        seo_slug = re.sub(r'[\s_]+', '-', product_name.strip()) or f'product-{product_id}'
+
         file_info = await bot.get_file(file_id)
-        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-        
+        ext = file_info.file_path.split('.')[-1].lower() if '.' in file_info.file_path else 'jpg'
+        file_bytes = io.BytesIO()
+        await bot.download_file(file_info.file_path, file_bytes)
+
+        # آپلود مستقیم بایت‌های عکس به کتابخانه رسانه وردپرس (بدون افشای توکن ربات و بدون نیاز به فچ سمت ووکامرس)
+        seo_filename = f"{seo_slug}-{file_info.file_unique_id[-4:]}.{ext}"
+        media_id = await wp_service.upload_media(file_bytes.getvalue(), seo_filename, alt_text, title_text)
+
         product = await wc_service.get_product(product_id)
         existing_images = product.get('images', [])
         
         main_image = {
-            "src": file_url,
+            "id": media_id,
             "name": title_text,
             "alt": alt_text
         }
@@ -441,11 +465,10 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
         update_data = {"images": existing_images}
         
         await wc_service.update_product(product_id, update_data)
-        updated_product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
             f"✅ <b>تصویر اصلی با مشخصات کامل ثبت شد!</b>\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, updated_product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, product_name), parse_mode="HTML"
         )
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت تصویر:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
@@ -502,11 +525,10 @@ async def process_seo_desc(message: Message, state: FSMContext):
         }
         
         await wc_service.update_product(product_id, update_payload)
-        product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
             f"✅ <b>اطلاعات سئو و پیوند دایمی با موفقیت ثبت شد!</b>\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, data.get('product_name', 'محصول')), parse_mode="HTML"
         )
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت سئو:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
@@ -601,17 +623,18 @@ async def process_set_primary_cat(callback: CallbackQuery, state: FSMContext):
         categories_payload = [{"id": cid} for cid in selected_cats]
         update_data = {
             "categories": categories_payload,
+            # توجه: کلید Yoast قدیمی (_yoast_wpseo_primary_product_cat) که اینجا بود حذف شد چون
+            # در بقیه‌ی این فایل و در articles.py فقط از کلیدهای rank_math_* استفاده می‌شود.
+            # اگر قطعه‌کد اختصاصی سایت واقعاً به کلید Yoast هم نیاز دارد، همین‌جا برش گردانید.
             "meta_data": [
-                {"key": "_yoast_wpseo_primary_product_cat", "value": str(primary_cat_id)},
                 {"key": "rank_math_primary_product_cat", "value": str(primary_cat_id)}
             ]
         }
         await wc_service.update_product(product_id, update_data)
-        product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
             f"✅ <b>دسته‌بندی‌ها ثبت شد!</b>\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, data.get('product_name', 'محصول')), parse_mode="HTML"
         )
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت دسته‌بندی:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
@@ -619,12 +642,16 @@ async def process_set_primary_cat(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("backdash_"))
 async def process_backdash(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.split("_")[1])
+    data = await state.get_data()
+    product_name = data.get('product_name')
     wait_msg = await callback.message.edit_text("⏳ در حال بازگشت...")
     try:
-        product = await wc_service.get_product(product_id)
+        if not product_name:
+            product = await wc_service.get_product(product_id)
+            product_name = product['name']
         await wait_msg.edit_text(
             f"👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, product_name), parse_mode="HTML"
         )
     except:
         pass
@@ -656,11 +683,10 @@ async def process_long_desc(message: Message, state: FSMContext):
     try:
         update_data = {"short_description": data['short_desc'], "description": html_text}
         await wc_service.update_product(product_id, update_data)
-        product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
             f"✅ <b>توضیحات محصول ذخیره شد!</b>\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, data.get('product_name', 'محصول')), parse_mode="HTML"
         )
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در ثبت توضیحات:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
@@ -696,11 +722,10 @@ async def process_stock(message: Message, state: FSMContext):
     try:
         update_data = {"regular_price": str(price), "manage_stock": True, "stock_quantity": stock}
         await wc_service.update_product(product_id, update_data)
-        product = await wc_service.get_product(product_id)
         
         await wait_msg.edit_text(
             f"✅ <b>قیمت و موجودی تنظیم شد!</b>\n\n👇 داشبورد محصول:",
-            reply_markup=get_dashboard_keyboard(product_id, product['name']), parse_mode="HTML"
+            reply_markup=get_dashboard_keyboard(product_id, data.get('product_name', 'محصول')), parse_mode="HTML"
         )
     except Exception as e:
         await wait_msg.edit_text(f"❌ خطا در تنظیم قیمت:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
