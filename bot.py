@@ -1,22 +1,27 @@
 import asyncio
 import os
 import json
+import hmac
+import hashlib
+import base64
 from aiohttp import web
 from aiogram import Bot, Dispatcher
-from config import BOT_TOKEN, ADMIN_ID
+
+# اضافه شدن کد محرمانه وب‌هوک به ایمپورت‌ها
+from config import BOT_TOKEN, ADMIN_ID, WC_WEBHOOK_SECRET
 
 # ایمپورت کردن ماژول‌هایی که ساختیم
 from utils.security import AdminOnlyMiddleware
 from handlers.common import router as common_router
 from handlers.products import router as products_router
-from handlers.orders import router as orders_router  # <--- این خط اضافه شد
+from handlers.orders import router as orders_router  
 
 # یک صفحه ساده برای اینکه رندر متوجه شود سرور وب ما روشن است
 async def health_check(request):
     return web.Response(text="🏺 CitySofal Bot is Live and Running!")
 
 # ==========================================
-# دریافت و بررسی وب‌هوک سفارش از ووکامرس (نسخه عیب‌یابی پیشرفته)
+# دریافت و بررسی وب‌هوک سفارش از ووکامرس (ایمن‌شده با HMAC)
 # ==========================================
 async def handle_order_webhook(request):
     bot_instance = request.app['bot']
@@ -27,13 +32,38 @@ async def handle_order_webhook(request):
         if not body:
             return web.json_response({"status": "ignored", "message": "Empty body"}, status=200)
 
+        # ==========================================
+        # لایه امنیتی: بررسی امضای دیجیتال ووکامرس
+        # ==========================================
+        received_signature = request.headers.get("x-wc-webhook-signature")
+        if not received_signature:
+            return web.json_response({"status": "unauthorized", "message": "Missing signature"}, status=401)
+
+        # محاسبه هش با استفاده از کلید محرمانه
+        expected_signature = base64.b64encode(
+            hmac.new(
+                WC_WEBHOOK_SECRET.encode('utf-8'),
+                body.encode('utf-8'),
+                hashlib.sha256
+            ).digest()
+        ).decode('utf-8')
+
+        # مقایسه ایمن دو امضا (برای جلوگیری از حملات تایمینگ)
+        if not hmac.compare_digest(received_signature, expected_signature):
+            await bot_instance.send_message(
+                chat_id=ADMIN_ID,
+                text="⚠️ <b>هشدار امنیتی:</b> تلاش مسدود شد! یک ریکوئست فیک و بدون امضای معتبر به وب‌هوک ارسال شد.",
+                parse_mode="HTML"
+            )
+            return web.json_response({"status": "unauthorized", "message": "Invalid signature"}, status=401)
+        # ==========================================
+
         try:
             data = json.loads(body)
         except json.JSONDecodeError as json_err:
-            # اگر فرمت JSON معتبر نبود، متن و خطای دیکد را ارسال می‌کنیم
             await bot_instance.send_message(
                 chat_id=ADMIN_ID,
-                text=f"ℹ️ **خطای ساختار JSON (غیر معتبر):**\n<code>{str(json_err)}</code>\n\n📦 **متن دریافتی:**\n<code>{body[:3000]}</code>",
+                text=f"ℹ️ <b>خطای ساختار JSON (غیر معتبر):</b>\n<code>{str(json_err)}</code>\n\n📦 <b>متن دریافتی:</b>\n<code>{body[:2000]}</code>",
                 parse_mode="HTML"
             )
             return web.json_response({"status": "received_non_json"}, status=200)
@@ -54,8 +84,8 @@ async def handle_order_webhook(request):
         email = billing.get("email", "")
         city = billing.get("city", "")
         address_1 = billing.get("address_1", "")
-        address_2 = billing.get("address_2", "")  # خط دوم آدرس / واحد
-        postcode = billing.get("postcode", "")    # کد پستی
+        address_2 = billing.get("address_2", "")
+        postcode = billing.get("postcode", "")
         state = billing.get("state", "")
 
         # ترکیب هوشمند خطوط آدرس
@@ -105,14 +135,14 @@ async def handle_order_webhook(request):
 
         # ساخت فاکتور نهایی
         order_text = (
-            f"{header_title}\n\n"
+            f"<b>{header_title}</b>\n\n"
             f"🆔 شماره سفارش: #{order_id}\n"
             f"📌 وضعیت: {persian_status}\n"
             f"💳 روش پرداخت: {payment_method_title}\n"
             f"🚚 روش ارسال: {shipping_method}\n\n"
             f"👤 مشخصات مشتری:\n"
             f"- نام: {first_name} {last_name}\n"
-            f"- تلفن: {phone}\n"
+            f"- تلفن: <code>{phone}</code>\n"
             f"- ایمیل: {email if email else 'ندارد'}\n"
             f"- آدرس: استان {state}، شهر {city}\n"
             f"  {full_address}\n\n"
@@ -126,18 +156,19 @@ async def handle_order_webhook(request):
 
         await bot_instance.send_message(
             chat_id=ADMIN_ID,
-            text=order_text
+            text=order_text,
+            parse_mode="HTML"
         )
 
         return web.json_response({"status": "success", "order_id": order_id}, status=200)
     
     except Exception as e:
-        # اگر هر خطای پیش‌بینی‌نشده‌ای رخ داد، متن کامل خطا به همراه کل بدنه (Body) جیسون ارسال می‌شود
+        # کاهش سقف برش متن به ۲۰۰۰ کاراکتر برای جلوگیری از سرریز شدن پیام در تلگرام
         error_msg = (
-            f"❌ **خطای پردازش وب‌هوک سفارش:**\n"
+            f"❌ <b>خطای پردازش وب‌هوک سفارش:</b>\n"
             f"<code>{str(e)}</code>\n\n"
-            f"📦 **متن کامل جیسون دریافتی که باعث خطا شد:**\n"
-            f"<code>{body[:3500]}</code>"
+            f"📦 <b>متن کامل جیسون دریافتی که باعث خطا شد:</b>\n"
+            f"<code>{body[:2000]}</code>"
         )
         print(error_msg)
         try:
@@ -149,7 +180,6 @@ async def handle_order_webhook(request):
         except Exception as telegram_err:
             print(f"Failed to send error log to Telegram: {telegram_err}")
             
-        # بازگرداندن کد 200 جهت جلوگیری از قطع شدن وب‌هوک در سمت ووکامرس
         return web.json_response({"status": "error", "message": str(e)}, status=200)
 
 async def main():
@@ -163,7 +193,7 @@ async def main():
     # اضافه کردن روترها
     dp.include_router(common_router)
     dp.include_router(products_router)
-    dp.include_router(orders_router)  # <--- این خط اضافه شد
+    dp.include_router(orders_router)
 
     # راه‌اندازی سرور وب
     app = web.Application()
