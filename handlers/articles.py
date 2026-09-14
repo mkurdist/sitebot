@@ -29,6 +29,62 @@ def build_primary_cat_keyboard(categories: list, selected: list) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 # ==========================================
+# موتور پردازش HTML مقاله
+# - ورودی باید message.html_text باشد تا بولد/ایتالیک/لینک تلگرام حفظ شود
+# - خطوط نقطه‌دار به <ul><li> واقعی تبدیل می‌شوند
+# - استایل جاستیفای/RTL به‌جای یک div کلی (که گوتنبرگ پاکش می‌کند)،
+#   روی تک‌تک تگ‌های بلوکی (p / li) تزریق می‌شود
+# - لینک‌ها در انتها nofollow/blank می‌شوند
+# ==========================================
+_BULLET_RE = re.compile(r'^(?:<[^>]+>)*\s*[-•\*]\s+(.*)')
+_BLOCK_STYLE = "text-align: justify; text-justify: inter-word; direction: rtl; line-height: 1.8;"
+
+def format_article_content(raw_html: str) -> str:
+    lines = raw_html.split('\n')
+    blocks = []
+    current_para = []
+    current_list = []
+
+    def flush_para():
+        if current_para:
+            joined = ' '.join(current_para).strip()
+            if joined:
+                blocks.append(f'<p style="{_BLOCK_STYLE}">{joined}</p>')
+            current_para.clear()
+
+    def flush_list():
+        if current_list:
+            items = ''.join(f'<li style="{_BLOCK_STYLE}">{item}</li>' for item in current_list)
+            blocks.append(f'<ul style="direction: rtl;">{items}</ul>')
+            current_list.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            flush_para()
+            flush_list()
+            continue
+        bullet_match = _BULLET_RE.match(stripped)
+        if bullet_match:
+            flush_para()
+            current_list.append(bullet_match.group(1).strip())
+        else:
+            flush_list()
+            current_para.append(stripped)
+
+    flush_para()
+    flush_list()
+
+    content = '\n'.join(blocks)
+
+    # nofollow/blank روی لینک‌ها (بدون دست‌کاری استایل‌های دیگر تگ <a>)
+    content = re.sub(r'\srel="[^"]*"', '', content)
+    content = re.sub(r'\starget="[^"]*"', '', content)
+    content = content.replace('<a ', '<a rel="nofollow" target="_blank" ')
+
+    return content
+
+# ==========================================
 # بخش دریافت متن مقاله و پردازش ۵ کادر
 # ==========================================
 @router.message(F.text == "📝 مقاله جدید")
@@ -59,7 +115,7 @@ async def start_article_wizard(message: Message, state: FSMContext):
 async def accumulate_article_text(message: Message, state: FSMContext):
     data = await state.get_data()
     current_buffer = data.get("article_buffer", "")
-    new_buffer = current_buffer + "\n\n" + message.text
+    new_buffer = current_buffer + "\n\n" + message.html_text
     await state.update_data(article_buffer=new_buffer)
     
     await message.answer("📥 <i>متن دریافت شد. اگر ادامه دارد بفرستید، در غیر این صورت دکمه «پردازش ۵ کادر و ادامه» در پیام بالا را بزنید.</i>", parse_mode="HTML")
@@ -88,17 +144,8 @@ async def process_article(callback: CallbackQuery, state: FSMContext):
         meta_desc = desc_match.group(1).strip() if desc_match else ""
         raw_content = content_match.group(1).strip() if content_match else text
         
-        # اعمال استایل‌های خودکار (جادوی سئو و ظاهر)
-        formatted_content = raw_content.replace('\n', '<br>')
-        formatted_content = re.sub(r'\srel="[^"]*"', '', formatted_content)
-        formatted_content = re.sub(r'\starget="[^"]*"', '', formatted_content)
-        formatted_content = formatted_content.replace('<a ', '<a rel="nofollow" target="_blank" ')
-        
-        final_html_content = (
-            f'<div style="text-align: justify; text-justify: inter-word; direction: rtl;">\n'
-            f'{formatted_content}\n'
-            f'</div>'
-        )
+        # اعمال موتور پردازش HTML (لیست‌ها، جاستیفای per-block، nofollow لینک‌ها)
+        final_html_content = format_article_content(raw_content)
 
         meta_data = {}
         if focus_kw: meta_data["rank_math_focus_keyword"] = focus_kw
@@ -191,7 +238,17 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
         media_id = await wp_service.upload_media(file_bytes.getvalue(), seo_filename, alt_text, image_title)
         await wp_service.update_post(post_id, {"featured_media": media_id})
         
-        # تغییر فاز: رفتن به بخش دسته‌بندی‌ها
+        # اگر فقط برای تعویض تصویر یک مقاله‌ی موجود اومده بودیم، دسته‌بندی‌های قبلی دست‌نخورده می‌مونه
+        if data.get("image_edit_only"):
+            await state.set_state(ArticleWizard.waiting_for_publish_action)
+            kb = build_post_dashboard_keyboard()
+            await wait_msg.edit_text(
+                f"✅ <b>تصویر شاخص با موفقیت به‌روزرسانی شد.</b>\n\n🎛 داشبورد مقاله:",
+                reply_markup=kb, parse_mode="HTML"
+            )
+            return
+        
+        # تغییر فاز: رفتن به بخش دسته‌بندی‌ها (فقط در مسیر ساخت مقاله‌ی تازه)
         await wait_msg.edit_text("⏳ تصویر آپلود شد. در حال دریافت دسته‌بندی‌های وبلاگ...")
         
         cats = await wp_service.get_categories()
@@ -268,22 +325,34 @@ async def proceed_to_dashboard(message: Message, state: FSMContext, primary_id: 
     
     await state.set_state(ArticleWizard.waiting_for_publish_action)
     
-    # ساخت داشبورد نهایی
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 انتشار عمومی در سایت", callback_data="post_action_publish")],
-        [InlineKeyboardButton(text="📝 نگهداری در پیش‌نویس", callback_data="post_action_draft")],
-        [InlineKeyboardButton(text="📊 استعلام نمره سئو (RankMath)", callback_data="post_action_seoscore")],
-        [InlineKeyboardButton(text="🗑 انتقال به زباله‌دان", callback_data="post_action_trash")]
-    ])
+    kb = build_post_dashboard_keyboard()
     
     await message.edit_text(
         f"✅ <b>دسته‌بندی‌ها با موفقیت تنظیم شدند.</b>\n\n"
         f"🎛 <b>داشبورد نهایی مدیریت مقاله:</b>\n"
-        f"🏷 عنوان: {post_title}\n"
-        f"📌 وضعیت فعلی: پیش‌نویس (Draft)\n\n"
-        f"لطفاً عملیات نهایی را انتخاب کنید:", 
+        f"🏷 عنوان: {post_title}\n\n"
+        f"لطفاً عملیات نهایی را انتخاب کنید یا مورد دیگری را ویرایش کنید:", 
         reply_markup=kb, parse_mode="HTML"
     )
+
+# ==========================================
+# کیبورد مشترک داشبورد نهایی (هم برای مقاله‌ی تازه‌ساخته، هم برای ویرایش موجود)
+# ==========================================
+def build_post_dashboard_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 انتشار عمومی در سایت", callback_data="post_action_publish")],
+        [InlineKeyboardButton(text="📝 نگهداری در پیش‌نویس", callback_data="post_action_draft")],
+        [InlineKeyboardButton(text="📊 استعلام نمره سئو (RankMath)", callback_data="post_action_seoscore")],
+        [
+            InlineKeyboardButton(text="✏️ عنوان", callback_data="postedit_title"),
+            InlineKeyboardButton(text="📄 محتوا", callback_data="postedit_content")
+        ],
+        [
+            InlineKeyboardButton(text="🖼 تصویر شاخص", callback_data="postedit_image"),
+            InlineKeyboardButton(text="🗂 دسته‌بندی‌ها", callback_data="postedit_cats")
+        ],
+        [InlineKeyboardButton(text="🗑 انتقال به زباله‌دان", callback_data="post_action_trash")]
+    ])
 
 # ==========================================
 # پردازشگر داشبورد نهایی و نمره سئو
@@ -329,3 +398,145 @@ async def handle_post_action(callback: CallbackQuery, state: FSMContext):
             await state.clear()
         except Exception as e:
             await callback.answer(f"❌ خطا: {str(e)[:50]}", show_alert=True)
+
+# ==========================================
+# ویرایش مقاله‌ی موجود: نمایش لیست آخرین مقالات
+# ==========================================
+@router.message(F.text == "✏️ ویرایش مقاله")
+async def list_recent_posts(message: Message, state: FSMContext):
+    await state.clear()
+    wait_msg = await message.answer("⏳ در حال دریافت آخرین مقالات سایت...")
+    try:
+        posts = await wp_service.get_recent_posts(per_page=10)
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در دریافت لیست مقالات:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+        return
+
+    if not posts:
+        await wait_msg.edit_text("📭 هیچ مقاله‌ای در سایت یافت نشد.")
+        return
+
+    status_emoji = {"publish": "🚀", "draft": "📝", "pending": "⏳", "trash": "🗑"}
+    kb = []
+    for p in posts:
+        title = p.get("title", {}).get("rendered", "بدون عنوان")
+        emoji = status_emoji.get(p.get("status"), "📌")
+        kb.append([InlineKeyboardButton(text=f"{emoji} {title[:40]}", callback_data=f"editpost_{p['id']}")])
+
+    await wait_msg.edit_text(
+        "✏️ <b>یکی از مقالات اخیر را برای ویرایش انتخاب کنید:</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("editpost_"))
+async def load_post_for_edit(callback: CallbackQuery, state: FSMContext):
+    post_id = int(callback.data.split("_")[1])
+    wait_msg_msg = callback.message
+    await wait_msg_msg.edit_text("⏳ در حال بارگذاری مقاله...")
+    try:
+        post = await wp_service.get_post(post_id)
+        post_title = post.get("title", {}).get("rendered", "بدون عنوان")
+        post_link = post.get("link", "")
+        focus_kw = post.get("meta", {}).get("rank_math_focus_keyword", "")
+        categories = post.get("categories", [])
+
+        await state.clear()
+        await state.update_data(
+            post_id=post_id,
+            post_title=post_title,
+            post_link=post_link,
+            focus_kw=focus_kw,
+            selected_cats=categories
+        )
+        await state.set_state(ArticleWizard.waiting_for_publish_action)
+
+        kb = build_post_dashboard_keyboard()
+        await wait_msg_msg.edit_text(
+            f"🎛 <b>داشبورد ویرایش مقاله:</b>\n🏷 عنوان: {post_title}\n\n"
+            f"کدام بخش را می‌خواهید ویرایش یا چه عملیاتی را انجام دهید؟",
+            reply_markup=kb, parse_mode="HTML"
+        )
+    except Exception as e:
+        await wait_msg_msg.edit_text(f"❌ خطا در بارگذاری مقاله:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+        await state.clear()
+    await callback.answer()
+
+# ==========================================
+# دکمه‌های ویرایش از داخل داشبورد
+# ==========================================
+@router.callback_query(F.data == "postedit_title", ArticleWizard.waiting_for_publish_action)
+async def start_edit_title(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ArticleWizard.waiting_for_edit_title)
+    await callback.message.answer("✏️ <b>عنوان جدید مقاله</b> را بفرستید:", parse_mode="HTML")
+    await callback.answer()
+
+@router.message(ArticleWizard.waiting_for_edit_title)
+async def process_edit_title(message: Message, state: FSMContext):
+    data = await state.get_data()
+    post_id = data['post_id']
+    new_title = message.text
+    wait_msg = await message.answer("⏳ در حال ثبت عنوان جدید...")
+    try:
+        await wp_service.update_post(post_id, {"title": new_title})
+        await state.update_data(post_title=new_title)
+        await state.set_state(ArticleWizard.waiting_for_publish_action)
+        kb = build_post_dashboard_keyboard()
+        await wait_msg.edit_text(
+            f"✅ <b>عنوان به‌روزرسانی شد.</b>\n\n🎛 داشبورد مقاله:", reply_markup=kb, parse_mode="HTML"
+        )
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در ثبت عنوان:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+
+@router.callback_query(F.data == "postedit_content", ArticleWizard.waiting_for_publish_action)
+async def start_edit_content(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ArticleWizard.waiting_for_edit_content)
+    await callback.message.answer(
+        "📄 <b>محتوای جدید مقاله</b> را بفرستید (کل متن جایگزین محتوای فعلی می‌شود):", parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(ArticleWizard.waiting_for_edit_content)
+async def process_edit_content(message: Message, state: FSMContext):
+    data = await state.get_data()
+    post_id = data['post_id']
+    wait_msg = await message.answer("⏳ در حال ثبت محتوای جدید...")
+    try:
+        final_html_content = format_article_content(message.html_text)
+        await wp_service.update_post(post_id, {"content": final_html_content})
+        await state.set_state(ArticleWizard.waiting_for_publish_action)
+        kb = build_post_dashboard_keyboard()
+        await wait_msg.edit_text(
+            f"✅ <b>محتوا به‌روزرسانی شد.</b>\n\n🎛 داشبورد مقاله:", reply_markup=kb, parse_mode="HTML"
+        )
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ خطا در ثبت محتوا:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+
+@router.callback_query(F.data == "postedit_image", ArticleWizard.waiting_for_publish_action)
+async def start_edit_image(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(image_edit_only=True)
+    await state.set_state(ArticleWizard.waiting_for_featured_image)
+    await callback.message.answer(
+        "🖼 لطفاً <b>تصویر شاخص جدید</b> مقاله را ارسال کنید (به صورت عکس یا فایل):", parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "postedit_cats", ArticleWizard.waiting_for_publish_action)
+async def start_edit_cats(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    wait_msg_msg = callback.message
+    await wait_msg_msg.edit_text("⏳ در حال دریافت دسته‌بندی‌های وبلاگ...")
+    try:
+        cats = await wp_service.get_categories()
+        cat_list = [{"id": c["id"], "name": c["name"]} for c in cats]
+        current_selected = data.get("selected_cats", [])
+        await state.update_data(wp_categories=cat_list, selected_cats=current_selected)
+        kb = build_categories_keyboard(cat_list, current_selected)
+        await wait_msg_msg.edit_text(
+            "🗂 <b>دسته‌بندی‌های مقاله را ویرایش کنید:</b>\n\n"
+            "دسته‌های فعلی از قبل تیک خورده‌اند. روی دسته‌ها کلیک کنید تا تغییر کند، سپس تایید بزنید:",
+            reply_markup=kb, parse_mode="HTML"
+        )
+        await state.set_state(ArticleWizard.waiting_for_categories)
+    except Exception as e:
+        await wait_msg_msg.edit_text(f"❌ خطا در دریافت دسته‌بندی:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+    await callback.answer()
