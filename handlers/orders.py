@@ -1,10 +1,11 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_ID
-from services.woocommerce import WooCommerceService
+
+# استفاده از نشست یکتا و سراسری
+from services.woocommerce import wc_service_instance as wc_service
 
 router = Router()
-wc_service = WooCommerceService()
 
 # تابع کمکی برای ساخت متن و کیبورد لیست سفارش‌ها (جهت استفاده مجدد و رفع باگ کرش دکمه بازگشت)
 async def generate_orders_list_data():
