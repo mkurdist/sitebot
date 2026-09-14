@@ -22,14 +22,15 @@ async def start_article_wizard(message: Message, state: FSMContext):
     
     instruction = (
         "📝 <b>سیستم انتشار هوشمند مقاله (وبلاگ)</b>\n\n"
-        "متن مقاله تولید شده توسط AI را اینجا Paste کنید.\n\n"
-        "<b>فرمت استاندارد:</b>\n"
+        "متن مقاله تولید شده توسط AI را اینجا Paste کنید.\n"
+        "<i>(نکته: اگر مقاله طولانی است، آن را در چند پیام بفرستید)</i>\n\n"
+        "<b>فرمت استاندارد جدید برای هوش مصنوعی:</b>\n"
         "۱. کادر عنوان مقاله:\n"
         "۲. کادر پیوند یکتا (Slug):\n"
         "۳. کادر کلمه کلیدی:\n"
         "۴. کادر توضیحات متا:\n"
         "۵. کادر محتوای مقاله:\n\n"
-        "پس از ارسال تمام بخش‌ها، روی دکمه پردازش کلیک کنید:"
+        "پس از ارسال تمام بخش‌ها، روی دکمه زیر کلیک کنید:"
     )
     await message.answer(instruction, reply_markup=keyboard, parse_mode="HTML")
 
@@ -40,7 +41,7 @@ async def accumulate_article_text(message: Message, state: FSMContext):
     new_buffer = current_buffer + "\n\n" + message.text
     await state.update_data(article_buffer=new_buffer)
     
-    await message.answer("📥 <i>متن دریافت شد. روی دکمه «پردازش ۵ کادر و ادامه» در پیام بالا کلیک کنید.</i>", parse_mode="HTML")
+    await message.answer("📥 <i>متن دریافت شد. اگر ادامه دارد بفرستید، در غیر این صورت دکمه «پردازش ۵ کادر و ادامه» در پیام بالا را بزنید.</i>", parse_mode="HTML")
 
 @router.callback_query(F.data == "process_article_buffer")
 async def process_article(callback: CallbackQuery, state: FSMContext):
@@ -51,9 +52,10 @@ async def process_article(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ هنوز هیچ متنی نفرستاده‌اید!", show_alert=True)
         return
 
-    wait_msg = await callback.message.answer("⏳ در حال تحلیل متن و ثبت پیش‌نویس اولیه در سایت...")
+    wait_msg = await callback.message.answer("⏳ در حال تحلیل متن، اعمال استایل‌ها و ساخت پیش‌نویس در سایت...")
     
     try:
+        # استخراج ۵ کادر با Regex
         title_match = re.search(r'۱\.\s*کادر عنوان مقاله:?\s*\n(.*?)(?=\n۲\.)', text, re.DOTALL)
         slug_match = re.search(r'۲\.\s*کادر پیوند یکتا.*?:?\s*\n(.*?)(?=\n۳\.)', text, re.DOTALL)
         kw_match = re.search(r'۳\.\s*کادر کلمه کلیدی:?\s*\n(.*?)(?=\n۴\.)', text, re.DOTALL)
@@ -66,7 +68,7 @@ async def process_article(callback: CallbackQuery, state: FSMContext):
         meta_desc = desc_match.group(1).strip() if desc_match else ""
         raw_content = content_match.group(1).strip() if content_match else text
         
-        # استایل‌های HTML (Nofollow و Justify)
+        # اعمال استایل‌های خودکار (جادوی سئو و ظاهر)
         formatted_content = raw_content.replace('\n', '<br>')
         formatted_content = re.sub(r'\srel="[^"]*"', '', formatted_content)
         formatted_content = re.sub(r'\starget="[^"]*"', '', formatted_content)
@@ -94,34 +96,34 @@ async def process_article(callback: CallbackQuery, state: FSMContext):
         post_id = result['id']
         post_link = result.get('link', '')
         
-        # ذخیره اطلاعات برای مرحله آپلود عکس
+        # ذخیره اطلاعات برای آپلود عکس
         await state.update_data(
-            post_id=post_id, 
-            post_title=post_title, 
+            post_id=post_id,
+            post_title=post_title,
             post_link=post_link,
             focus_kw=focus_kw
         )
         await state.set_state(ArticleWizard.waiting_for_featured_image)
         
-        await wait_msg.edit_text(
-            f"✅ <b>متن، سئو و استایل‌ها ثبت شد!</b>\n\n"
-            f"🖼 حالا لطفاً <b>تصویر شاخص (عکس اصلی)</b> مقاله را ارسال کنید (فایل یا عکس):", 
-            parse_mode="HTML"
+        success_msg = (
+            f"✅ <b>متن، سئو و استایل‌ها با موفقیت در سایت پیش‌نویس شد!</b>\n\n"
+            f"🖼 حالا لطفاً <b>تصویر شاخص (عکس اصلی)</b> مقاله را ارسال کنید (به صورت عکس یا فایل):"
         )
+        await wait_msg.edit_text(success_msg, parse_mode="HTML")
         await callback.answer()
         
     except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در پردازش متن:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
+        await wait_msg.edit_text(f"❌ خطا در پردازش و ایجاد مقاله:\n<code>{str(e)[:500]}</code>", parse_mode="HTML")
         await state.clear()
         await callback.answer()
 
 # ==========================================
-# فاز آپلود هوشمند عکس، تغییر نام و ثبت متا
+# سیستم آپلود عکس، نام‌گذاری سئوشده و Alt
 # ==========================================
 @router.message(ArticleWizard.waiting_for_featured_image, F.photo | F.document)
 async def process_featured_image(message: Message, state: FSMContext):
     file_id = None
-    ext = "jpg" # پیش‌فرض
+    ext = "jpg" # پسوند پیش‌فرض
     
     if message.photo:
         file_id = message.photo[-1].file_id
@@ -131,7 +133,7 @@ async def process_featured_image(message: Message, state: FSMContext):
             ext = message.document.file_name.split('.')[-1].lower()
             
     if not file_id:
-        await message.answer("❌ فایل نامعتبر! لطفاً یک عکس ارسال کنید.")
+        await message.answer("❌ فایل نامعتبر! لطفاً یک عکس معتبر ارسال کنید.")
         return
 
     await state.update_data(image_file_id=file_id, image_ext=ext)
@@ -157,36 +159,36 @@ async def process_image_title(message: Message, state: FSMContext, bot: Bot):
     post_link = data['post_link']
     kw = data.get('focus_kw', '').strip()
     
-    wait_msg = await message.answer("⏳ در حال تبدیل فرمت، ساخت نام سئوشده و آپلود در رسانه سایت...")
+    wait_msg = await message.answer("⏳ در حال دانلود تصویر، اعمال نام‌گذاری سئو و آپلود در سایت...")
     
     try:
-        # ۱. ساخت نام فایل بر اساس کلمه کلیدی
+        # ۱. بهینه‌سازی نام فایل بر اساس کلمه کلیدی
         if not kw:
             kw = f"citysofal-article-{post_id}"
             
-        # تبدیل فاصله‌ها و کاراکترهای نامعتبر به خط تیره برای نام فایل
+        # جایگزینی فاصله‌ها و آندرلاین‌ها با خط تیره (Dash)
         kw_slug = re.sub(r'[\s_]+', '-', kw)
         
         file_info = await bot.get_file(file_id)
-        # خروجی نهایی نام عکس: مثلا ظروف-سفالی-Ag4b.webp
+        # خروجی نهایی: مثلا خرید-گلدان-سفالی-Ab2c.webp
         seo_filename = f"{kw_slug}-{file_info.file_unique_id[-4:]}.{ext}" 
         
-        # ۲. دانلود در حافظه رم
+        # ۲. دانلود عکس در حافظه رم
         file_bytes = io.BytesIO()
         await bot.download_file(file_info.file_path, file_bytes)
         
-        # ۳. آپلود در رسانه وردپرس
+        # ۳. آپلود در رسانه سایت
         media_id = await wp_service.upload_media(file_bytes.getvalue(), seo_filename, alt_text, image_title)
         
-        # ۴. اتصال به عنوان تصویر شاخص مقاله
+        # ۴. اتصال عکس به عنوان تصویر شاخص مقاله
         await wp_service.update_post(post_id, {"featured_media": media_id})
         
         success_msg = (
             f"🎉 <b>جادوی سئوی تصویر انجام شد!</b>\n\n"
-            f"📂 <b>نام فایل ساخته شده:</b> <code>{seo_filename}</code>\n"
+            f"📂 <b>نام فایل سئوشده:</b> <code>{seo_filename}</code>\n"
             f"🏷 <b>عنوان مقاله:</b> {post_title}\n"
             f"🌐 <a href='{post_link}'>لینک پیش‌نمایش در سایت</a>\n\n"
-            f"<i>نکته: مقاله در وضعیت پیش‌نویس است.</i>"
+            f"<i>نکته: مقاله به همراه تمامی تنظیمات در وضعیت پیش‌نویس قرار گرفت.</i>"
         )
         await wait_msg.edit_text(success_msg, parse_mode="HTML", disable_web_page_preview=True)
         await state.clear()
