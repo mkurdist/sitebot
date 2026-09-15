@@ -16,9 +16,12 @@ WC_WEBHOOK_SECRET = os.getenv("WC_WEBHOOK_SECRET")
 WP_USER = os.getenv("WP_USER")
 WP_APP_PASS = os.getenv("WP_APP_PASS")
 
+# دیتابیس سوپابیس
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 # بررسی وجود متغیرها
-if not all([BOT_TOKEN, ADMIN_ID, WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET, WC_WEBHOOK_SECRET, WP_USER, WP_APP_PASS]):
-    raise ValueError("❌ Missing environment variables! Check Render settings.")
+if not all([BOT_TOKEN, ADMIN_ID, WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET, WC_WEBHOOK_SECRET, WP_USER, WP_APP_PASS, DATABASE_URL]):
+    raise ValueError("❌ Missing environment variables! Check Render settings (Including DATABASE_URL).")
 
 ADMIN_ID = int(ADMIN_ID)
 WC_URL = WC_URL.rstrip("/")
