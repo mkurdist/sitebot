@@ -441,15 +441,14 @@ def _paragraph_html(text: str) -> str:
 
 
 def build_short_html(p: dict) -> str:
-    return f"<p>{_paragraph_html(p['short_description'])}</p>"
+    return build_specs_table(p["specs"])
 
 
 def build_description_html(p: dict) -> str:
-    """متن محاوره‌ای (ایتالیک) + توضیحات کامل + جدول مشخصات؛ بدون خط جدید اضافه تا wpautop چیزی نشکند."""
     return (
+        f"<p>{_paragraph_html(p['short_description'])}</p>"
         f"<p><em>{_paragraph_html(p['conversational_text'])}</em></p>"
         f"{p['full_description_html']}"
-        f"{build_specs_table(p['specs'])}"
     )
 
 
