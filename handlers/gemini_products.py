@@ -507,10 +507,12 @@ async def gp_review_hint(message: Message):
 # ==========================================
 def _build_payload(p: dict, media_ids: dict, n_images: int) -> dict:
     images = []
+    slug = p["slug"]
     for i in range(n_images):
+        img_title = slug if i == 0 else f"{slug}-{i + 1}"
         images.append({
             "id": media_ids[i],
-            "name": p["title"] if i == 0 else f"{p['title']} - تصویر {i + 1}",
+            "name": img_title,
             "alt": p["image_alt_texts"][i],
         })
     return {
@@ -548,15 +550,16 @@ async def gp_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
     wait_msg = await callback.message.answer("⏳ در حال ارسال به سایت…")
 
     try:
-        # ۱) آپلود عکس‌ها (اگر خطا شد، هنوز محصولی ساخته نشده)
+        # ۱) آپلود عکس‌ها با نام و عنوان یکپارچه بر اساس نامک انگلیسی (slug) بدون دستکاری فرمت
         if d["created_id"] is None:
+            slug = p["slug"]
             for i, img in enumerate(d["images"]):
                 if i in d["media"]:
                     continue
                 await _safe_edit(wait_msg, f"⏳ آپلود عکس {i + 1} از {n} در کتابخانه‌ی رسانه…")
-                fname = f"{p['slug']}.{img['ext']}" if n == 1 else f"{p['slug']}-{i + 1}.{img['ext']}"
-                title = p["title"] if i == 0 else f"{p['title']} - تصویر {i + 1}"
-                d["media"][i] = await wp_service.upload_media(img["bytes"], fname, p["image_alt_texts"][i], title)
+                img_title = slug if i == 0 else f"{slug}-{i + 1}"
+                fname = f"{img_title}.{img['ext']}"
+                d["media"][i] = await wp_service.upload_media(img["bytes"], fname, p["image_alt_texts"][i], img_title)
 
             # ۲) ساخت محصول (پیش‌نویس) با تمام اطلاعات در یک درخواست
             await _safe_edit(wait_msg, "⏳ در حال ساخت محصول (پیش‌نویس) در ووکامرس…")
