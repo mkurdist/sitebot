@@ -15,9 +15,10 @@ from config import BOT_TOKEN, ADMIN_ID, WC_WEBHOOK_SECRET, DATABASE_URL
 # ایمپورت کردن ماژول‌هایی که ساختیم
 from utils.security import AdminOnlyMiddleware
 from handlers.common import router as common_router
+from handlers.gemini_products import router as gemini_router   # روتر جدید محصولات جمینای
 from handlers.products import router as products_router
-from handlers.orders import router as orders_router  
-from handlers.articles import router as articles_router  
+from handlers.orders import router as orders_router
+from handlers.articles import router as articles_router
 
 from services.woocommerce import wc_service_instance as wc_service
 from services.wordpress import wp_service_instance as wp_service
@@ -213,6 +214,7 @@ async def main():
     dp.callback_query.middleware(AdminOnlyMiddleware())
 
     dp.include_router(common_router)
+    dp.include_router(gemini_router)    # ← اضافه شده دقیقا بین common و products
     dp.include_router(products_router)
     dp.include_router(orders_router)
     dp.include_router(articles_router)
