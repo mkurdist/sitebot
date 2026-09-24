@@ -441,14 +441,19 @@ def _paragraph_html(text: str) -> str:
 
 
 def build_short_html(p: dict) -> str:
+    """جدول مشخصات محصول که کنار تصویر در کادر توضیحات کوتاه ووکامرس قرار می‌گیرد."""
     return build_specs_table(p["specs"])
 
 
 def build_description_html(p: dict) -> str:
+    """متن محاوره‌ای و توضیح کوتاه همراه با بوک‌مارک و فاصله‌ی ۲ سطری و استایل Justify."""
+    styled_full = re.sub(r"<p(?![a-zA-Z0-9])([^>]*)>", r'<p style="text-align: justify;"\1>', p["full_description_html"])
     return (
-        f"<p>{_paragraph_html(p['short_description'])}</p>"
-        f"<p><em>{_paragraph_html(p['conversational_text'])}</em></p>"
-        f"{p['full_description_html']}"
+        f'<div style="text-align: justify; line-height: 2;">'
+        f'<p style="text-align: justify; margin-bottom: 2em;">🔖 {_paragraph_html(p["short_description"])}</p>'
+        f'<p style="text-align: justify; margin-bottom: 2em;"><em>🔖 {_paragraph_html(p["conversational_text"])}</em></p>'
+        f'{styled_full}'
+        f'</div>'
     )
 
 
@@ -458,7 +463,7 @@ def build_preview_document(p: dict) -> bytes:
         "<!doctype html><html lang='fa' dir='rtl'><head><meta charset='utf-8'>"
         f"<title>{title}</title>"
         "<style>body{font-family:Tahoma,Arial,sans-serif;max-width:820px;margin:24px auto;"
-        "line-height:2;padding:0 16px}h1{font-size:22px}small{color:#777}</style></head><body>"
+        "line-height:2;padding:0 16px;text-align:justify}h1{font-size:22px}small{color:#777}</style></head><body>"
         f"<h1>{title}</h1><small>پیش‌نمایش توضیح کوتاه</small>{build_short_html(p)}<hr>"
         f"{build_description_html(p)}</body></html>"
     )
