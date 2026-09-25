@@ -209,7 +209,11 @@ async def main():
     dp = Dispatcher()
 
     print("🔌 Connecting to Supabase Database...")
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    db_pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=5
+    )
     
     async with db_pool.acquire() as conn:
         await conn.execute('''
