@@ -10,13 +10,17 @@ router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    # طراحی دکمه‌های کیبورد پایین صفحه
+    # طراحی دکمه‌های کیبورد پایین صفحه با چیدمان جدید (۸ دکمه)
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="⚡ افزودن خودکار (AI)"), KeyboardButton(text="➕ محصول جدید")],
-            [KeyboardButton(text="🛍 محصولات سایت"), KeyboardButton(text="📦 آخرین سفارش‌ها")],
+            # ردیف اول: ابزارهای هوش مصنوعی و اتوماسیون
+            [KeyboardButton(text="🤖 محصول با Gemini"), KeyboardButton(text="⚡ افزودن خودکار (AI)")],
+            # ردیف دوم: مدیریت دستی محصولات
+            [KeyboardButton(text="➕ محصول جدید"), KeyboardButton(text="🛍 محصولات سایت")],
+            # ردیف سوم: مدیریت مقالات
             [KeyboardButton(text="📝 مقاله جدید"), KeyboardButton(text="✏️ ویرایش مقاله")],
-            [KeyboardButton(text="⚙️ تنظیمات")]
+            # ردیف چهارم: سفارشات و تنظیمات
+            [KeyboardButton(text="📦 آخرین سفارش‌ها"), KeyboardButton(text="⚙️ تنظیمات")]
         ],
         resize_keyboard=True,
         input_field_placeholder="یک گزینه را انتخاب کنید..."
