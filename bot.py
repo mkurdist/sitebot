@@ -6,8 +6,8 @@ import hashlib
 import base64
 import asyncpg
 from aiohttp import web
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Bot, Dispatcher, Router, F, BaseMiddleware
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message
 
 # اضافه شدن کانکشن استرینگ دیتابیس به ایمپورت‌ها
 from config import BOT_TOKEN, ADMIN_ID, WC_WEBHOOK_SECRET, DATABASE_URL
@@ -25,6 +25,24 @@ from services.wordpress import wp_service_instance as wp_service
 
 # ساخت یک روتر داخلی فقط برای دکمه‌های مربوط به وب‌هوک
 webhook_router = Router()
+
+# ==========================================
+# میدلور هوشمند برای خروج خودکار از وضعیت‌ها (FSM) 
+# هنگام کلیک روی دکمه‌های منوی اصلی
+# ==========================================
+MENU_BUTTONS = {
+    "🤖 محصول با Gemini", "⚡ افزودن خودکار (AI)", "➕ محصول جدید", 
+    "🛍 محصولات سایت", "📝 مقاله جدید", "✏️ ویرایش مقاله", 
+    "📦 آخرین سفارش‌ها", "⚙️ تنظیمات", "/start", "/cancel"
+}
+
+class ClearStateOnMenuMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: Message, data: dict):
+        if event.text and event.text in MENU_BUTTONS:
+            state = data.get("state")
+            if state:
+                await state.clear()
+        return await handler(event, data)
 
 # ==========================================
 # دکمه: سفارش رو گرفتم ✅
@@ -86,7 +104,6 @@ async def handle_order_webhook(request):
         # منطق دیتابیس (جلوگیری از تکرار + پاک کردن پیام قبلی)
         # ==========================================
         async with db_pool.acquire() as conn:
-            # بررسی اینکه آیا این سفارش قبلاً در دیتابیس ثبت شده است یا خیر
             row = await conn.fetchrow('SELECT status, message_id FROM order_notifications WHERE order_id = $1', order_id)
             
             old_message_id = None
@@ -94,12 +111,10 @@ async def handle_order_webhook(request):
                 old_status = row['status']
                 old_message_id = row['message_id']
                 
-                # اگر وضعیت سفارش تغییری نکرده، یعنی سیگنال تکراری است -> نادیده بگیر
                 if old_status == status:
                     print(f"🔄 Ignored duplicate webhook for Order #{order_id} (Status: {status})")
                     return web.json_response({"status": "ignored_duplicate"}, status=200)
                 
-                # اگر وضعیت تغییر کرده (مثلا از pending رفته به processing)، پیام قبلی را از تلگرام پاک کن
                 if old_message_id:
                     try:
                         await bot_instance.delete_message(chat_id=ADMIN_ID, message_id=old_message_id)
@@ -162,14 +177,12 @@ async def handle_order_webhook(request):
         if customer_note:
             order_text += f"\n\n📝 یادداشت: {customer_note}"
 
-        # ساخت دکمه شیشه‌ای فقط برای سفارش‌های پرداخت شده
         reply_markup = None
         if status in ["processing", "completed"]:
             reply_markup = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📦 سفارش رو گرفتم (بستن)", callback_data=f"ack_order_{order_id}")]
             ])
 
-        # ارسال پیام جدید
         sent_msg = await bot_instance.send_message(
             chat_id=ADMIN_ID,
             text=order_text,
@@ -177,7 +190,6 @@ async def handle_order_webhook(request):
             reply_markup=reply_markup
         )
         
-        # ذخیره آیدی پیام جدید و وضعیت در سوپابیس
         async with db_pool.acquire() as conn:
             await conn.execute('''
                 INSERT INTO order_notifications (order_id, status, message_id)
@@ -196,7 +208,6 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
-    # اتصال به دیتابیس Supabase و ساخت جدول در صورت عدم وجود
     print("🔌 Connecting to Supabase Database...")
     db_pool = await asyncpg.create_pool(DATABASE_URL)
     
@@ -212,13 +223,16 @@ async def main():
 
     dp.message.middleware(AdminOnlyMiddleware())
     dp.callback_query.middleware(AdminOnlyMiddleware())
+    
+    # 🌟 ثبت میدلور خروج از وضعیت 🌟
+    dp.message.middleware(ClearStateOnMenuMiddleware())
 
     dp.include_router(common_router)
-    dp.include_router(gemini_router)    # ← اضافه شده دقیقا بین common و products
+    dp.include_router(gemini_router)
     dp.include_router(products_router)
     dp.include_router(orders_router)
     dp.include_router(articles_router)
-    dp.include_router(webhook_router) # اضافه شدن روتر دکمه‌های وب‌هوک
+    dp.include_router(webhook_router)
 
     app = web.Application()
     app['bot'] = bot
@@ -242,7 +256,7 @@ async def main():
     finally:
         await bot.session.close()
         await runner.cleanup()
-        await db_pool.close() # بستن ایمن کانکشن دیتابیس
+        await db_pool.close()
         await wc_service.close()
         await wp_service.close()
 
